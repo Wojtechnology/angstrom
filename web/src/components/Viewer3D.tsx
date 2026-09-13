@@ -8,6 +8,8 @@ export interface ViewerHandle {
 }
 
 export interface HoveredAtom { index: number; elem: string }
+/** identifies one clash entry of the diagnostics: protein_clashes[i] or intra_clashes[i] */
+export interface ClashRef { kind: 'protein' | 'intra'; index: number }
 
 export interface ViewerProps {
   gtReceptor: string
@@ -29,8 +31,12 @@ export interface ViewerProps {
   diagnostics?: Diagnostics | null
   atomDisplacement?: number[] | null
   highlightAtoms?: number[] | null
+  /** clash entry hovered in the panel: drawn emphasised, others dimmed */
+  highlightClash?: ClashRef | null
   /** fired (throttled) when the mouse enters / leaves a predicted-ligand atom */
   onAtomHover?: (atom: HoveredAtom | null) => void
+  /** fired when the mouse enters / leaves a clash line or protein-atom marker in the viewer */
+  onClashHover?: (clash: ClashRef | null) => void
 }
 
 const GT_LIGAND = '#2f9e6b'
@@ -148,7 +154,7 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     styleAll(v, models.current, props)
     applyHoverable.current()
     v.render()
-  }, [props.showGtReceptor, props.showGtLigand, props.showPredLigand, props.showPredReceptor, props.showPocket, props.showViolations, props.trajectoryMode, props.diagnostics, props.highlightAtoms, props.atomDisplacement, props.predColor])
+  }, [props.showGtReceptor, props.showGtLigand, props.showPredLigand, props.showPredReceptor, props.showPocket, props.showViolations, props.trajectoryMode, props.diagnostics, props.highlightAtoms, props.highlightClash, props.atomDisplacement, props.predColor])
 
   useEffect(() => {
     const v = viewer.current
@@ -172,6 +178,7 @@ type Models = {
   gtRec?: $3Dmol.GLModel; gtLig?: $3Dmol.GLModel; predRec?: $3Dmol.GLModel; predLig?: $3Dmol.GLModel
   traj?: $3Dmol.GLModel; pocketTraj?: $3Dmol.GLModel; pocketRec?: $3Dmol.GLModel
   gtPocket?: ResidueSel[]; predPocket?: ResidueSel[]
+  clashLabel?: $3Dmol.Label
 }
 
 /** Residues of `rec` with any heavy atom within POCKET_CUTOFF of any atom of `lig`, grouped by chain. */
@@ -198,6 +205,7 @@ function pocketSelection(rec: $3Dmol.GLModel, lig: $3Dmol.GLModel | undefined): 
 
 function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
   v.removeAllShapes()
+  if (m.clashLabel) { v.removeLabel(m.clashLabel); m.clashLabel = undefined }
   const hide: $3Dmol.AtomStyleSpec = {}  // empty style = not drawn
 
   const pocketMode = p.trajectoryMode === 'pocket' && !!m.pocketTraj
@@ -241,30 +249,50 @@ function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
 
   if (p.showViolations && p.diagnostics && !showTraj) {
     const d = p.diagnostics
+    const hc = p.highlightClash ?? null
+    const dimming = hc != null  // one clash is emphasised: fade every other violation marker
     if (d.flagged_atoms.length) {
-      v.addStyle({ model: lig, index: d.flagged_atoms }, { sphere: { radius: 0.55, color: '#d64545', opacity: 0.5 } })
+      v.addStyle({ model: lig, index: d.flagged_atoms }, { sphere: { radius: 0.55, color: '#d64545', opacity: dimming ? 0.15 : 0.5 } })
     }
     const ligAtoms = lig.selectedAtoms({}) as $3Dmol.AtomSpec[]
-    for (const c of d.protein_clashes) {
+    const hoverCbs = (ref: ClashRef) => ({
+      hoverable: true,
+      hover_callback: () => propsOnClashHover(p, ref),
+      unhover_callback: () => propsOnClashHover(p, null),
+    })
+    const xyz = (a: $3Dmol.AtomSpec) => ({ x: a.x!, y: a.y!, z: a.z! })
+    const labelAt = (a: $3Dmol.AtomSpec, b: $3Dmol.AtomSpec, text: string) => {
+      m.clashLabel = v.addLabel(text, {
+        position: { x: (a.x! + b.x!) / 2, y: (a.y! + b.y!) / 2, z: (a.z! + b.z!) / 2 }, backgroundColor: '#f2b01e', backgroundOpacity: 0.95,
+        fontColor: '#1c1c22', fontSize: 11, borderThickness: 0, inFront: true,
+      } as $3Dmol.LabelSpec)
+    }
+    d.protein_clashes.forEach((c, i) => {
       const a = ligAtoms[c.atom]
       // clash was measured against the predicted receptor; draw against it, falling back to the GT receptor
       const sel = { chain: c.protein.chain, resi: c.protein.resnum, atom: c.protein.atom }
       const ref = (m.predRec?.selectedAtoms(sel) as $3Dmol.AtomSpec[] | undefined) ?? []
       const b = ref.length ? ref[0] : ((m.gtRec?.selectedAtoms(sel) as $3Dmol.AtomSpec[] | undefined) ?? [])[0]
-      if (a && b && a.x != null && b.x != null) {
-        v.addCylinder({ start: { x: a.x, y: a.y!, z: a.z! }, end: { x: b.x, y: b.y!, z: b.z! }, radius: 0.06, dashed: true, color: '#d64545', fromCap: 1, toCap: 1 })
-        const hl = p.highlightAtoms?.includes(c.atom)
-        v.addSphere({ center: { x: b.x, y: b.y!, z: b.z! }, radius: hl ? 0.5 : 0.35, color: hl ? '#f2b01e' : '#d64545', alpha: hl ? 0.85 : 0.35 })
-      }
-    }
-    for (const c of d.intra_clashes) {
+      if (!(a && b && a.x != null && b.x != null)) return
+      const hl = hc?.kind === 'protein' && hc.index === i
+      const atomHl = !dimming && !!p.highlightAtoms?.includes(c.atom)
+      const cb = hoverCbs({ kind: 'protein', index: i })
+      v.addCylinder({ start: xyz(a), end: xyz(b), radius: hl ? 0.14 : 0.06, dashed: true, color: hl ? '#f2b01e' : '#d64545', alpha: dimming && !hl ? 0.2 : 1, fromCap: 1, toCap: 1, ...cb })
+      v.addSphere({ center: xyz(b), radius: hl || atomHl ? 0.55 : 0.35, color: hl || atomHl ? '#f2b01e' : '#d64545', alpha: hl || atomHl ? 0.9 : dimming ? 0.12 : 0.35, ...cb })
+      if (hl) { v.addSphere({ center: xyz(a), radius: 0.7, color: '#f2b01e', alpha: 0.85 }); labelAt(a, b, `${c.dist.toFixed(2)} Å`) }
+    })
+    d.intra_clashes.forEach((c, i) => {
       const a = ligAtoms[c.atoms[0]], b = ligAtoms[c.atoms[1]]
-      if (a && b && a.x != null && b.x != null) v.addCylinder({ start: { x: a.x, y: a.y!, z: a.z! }, end: { x: b.x, y: b.y!, z: b.z! }, radius: 0.06, dashed: true, color: '#d98c1c' })
-    }
+      if (!(a && b && a.x != null && b.x != null)) return
+      const hl = hc?.kind === 'intra' && hc.index === i
+      const cb = hoverCbs({ kind: 'intra', index: i })
+      v.addCylinder({ start: xyz(a), end: xyz(b), radius: hl ? 0.14 : 0.06, dashed: true, color: hl ? '#f2b01e' : '#d98c1c', alpha: dimming && !hl ? 0.2 : 1, ...cb })
+      if (hl) { for (const q of [a, b]) v.addSphere({ center: xyz(q), radius: 0.7, color: '#f2b01e', alpha: 0.85 }); labelAt(a, b, `${c.dist.toFixed(2)} Å`) }
+    })
   }
 
   // hover highlight goes last so it wins over the violation sphere on the same atom
-  if (p.highlightAtoms && p.highlightAtoms.length) {
+  if (p.highlightAtoms && p.highlightAtoms.length && !p.highlightClash) {
     v.addStyle({ model: lig, index: p.highlightAtoms }, { sphere: { radius: 0.75, color: '#f2b01e', opacity: 0.85 } })
   }
 
@@ -283,6 +311,11 @@ function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
       },
     })
   }
+}
+
+/** clash-shape hover callbacks run inside 3Dmol's event loop; route them to the latest props */
+function propsOnClashHover(p: ViewerProps, ref: ClashRef | null) {
+  p.onClashHover?.(ref)
 }
 
 function elemMap(carbon: string): Record<string, string> {

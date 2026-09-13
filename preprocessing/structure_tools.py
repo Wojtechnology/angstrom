@@ -388,7 +388,7 @@ def _energy(mol, props, pos=None):
     return float(ff.CalcEnergy(pos.ravel().tolist()) if pos is not None else ff.CalcEnergy())
 
 
-def minimise_with_trajectory(mol: Chem.Mol, max_frames: int = 30, its_per_frame: int = 15, n_global: int = 30, seed: int = 42):
+def minimise_with_trajectory(mol: Chem.Mol, max_frames: int = 60, its_per_frame: int = 15, max_its: int = 2000, n_global: int = 30, seed: int = 42):
     """MMFF94s minimisation of a ligand pose recording a trajectory.
 
     Returns (summary dict, list of heavy-atom coordinate frames, mol with hydrogens at the local minimum).
@@ -409,23 +409,26 @@ def minimise_with_trajectory(mol: Chem.Mol, max_frames: int = 30, its_per_frame:
     e_pose = _energy(mh, props)
     pos_pose = mh.GetConformer().GetPositions()
 
-    # (b) free local minimisation, recording frames
+    # (b) free local minimisation, one frame per `its_per_frame` iterations until convergence
     ff = AllChem.MMFFGetMoleculeForceField(mh, props)
     frames = [pos_pose[heavy].copy()]
     energies = [e_pose]
     converged = False
-    for _ in range(max_frames - 1):
+    total_its = 0
+    while total_its < max_its:
         rc = ff.Minimize(maxIts=its_per_frame)
+        total_its += its_per_frame
         pos = np.array(ff.Positions()).reshape(-1, 3)
         frames.append(pos[heavy].copy())
         energies.append(float(ff.CalcEnergy()))
         if rc == 0:
             converged = True
             break
-    ff.Minimize(maxIts=2000)  # finish to the local minimum
+    if len(frames) > max_frames:  # keep every k-th frame, always first and last
+        keep = sorted(set(np.linspace(0, len(frames) - 1, max_frames).round().astype(int).tolist()))
+        frames = [frames[i] for i in keep]
+        energies = [energies[i] for i in keep]
     pos_local = np.array(ff.Positions()).reshape(-1, 3)
-    if not converged:
-        frames.append(pos_local[heavy].copy()); energies.append(float(ff.CalcEnergy()))
     conf = mh.GetConformer()
     for i, p in enumerate(pos_local):
         conf.SetAtomPosition(i, p.tolist())
@@ -447,7 +450,7 @@ def minimise_with_trajectory(mol: Chem.Mol, max_frames: int = 30, its_per_frame:
         "strain_local": round(e_pose - e_local, 2), "strain_global": round(e_pose - e_global, 2),
         "rmsd_drift": round(rmsd_drift, 3), "max_atom_displacement": round(float(disp.max()), 3),
         "atom_displacement": [round(float(d), 3) for d in disp],
-        "n_frames": len(frames), "converged": converged, "energies": [round(e, 2) for e in energies],
+        "n_frames": len(frames), "converged": converged, "total_iterations": total_its, "energies": [round(e, 2) for e in energies],
         "frame_rmsd": [round(float(np.sqrt(np.mean(np.sum((f - frames[0]) ** 2, axis=1)))), 3) for f in frames],
     }
     return summary, frames, mh
@@ -535,7 +538,7 @@ def _parse_protein(pdb_text: str):
 
 
 def minimise_in_pocket(lig_mol: Chem.Mol, receptor_pdb_text: str, cutoff: float = 8.0, restrain_cut: float = 6.0,
-                       max_frames: int = 16, its_per_frame: int = 40):
+                       its_per_frame: int = 40, max_its: int = 1000):
     """Restrained minimisation of the ligand inside its binding pocket (MMFF94s, UFF fallback).
 
     Whole residues with any heavy atom within `cutoff` Å of the ligand are kept. Backbone atoms and
@@ -674,20 +677,16 @@ def minimise_in_pocket(lig_mol: Chem.Mol, receptor_pdb_text: str, cutoff: float 
         pk_frames = [pos0[heavy_p].copy()]
         energies = [e_pose]
         converged = False
-        for _ in range(max_frames - 1):
+        total_its = 0
+        while total_its < max_its:  # uniform sampling: one frame per `its_per_frame` iterations
             rc = ff.Minimize(maxIts=its_per_frame)
+            total_its += its_per_frame
             pos = np.array(ff.Positions()).reshape(-1, 3)
             lig_frames.append(pos[n_p:][heavy_l].copy()); pk_frames.append(pos[heavy_p].copy())
             energies.append(float(plain.CalcEnergy(pos.ravel().tolist())))
             if rc == 0:
                 converged = True
                 break
-        if not converged:
-            rc = ff.Minimize(maxIts=1000)
-            converged = rc == 0
-            pos = np.array(ff.Positions()).reshape(-1, 3)
-            lig_frames.append(pos[n_p:][heavy_l].copy()); pk_frames.append(pos[heavy_p].copy())
-            energies.append(float(plain.CalcEnergy(pos.ravel().tolist())))
         pos1 = np.array(ff.Positions()).reshape(-1, 3)
         e_min = float(plain.CalcEnergy(pos1.ravel().tolist()))
         ep1, el1 = frag_energies(pos1)
@@ -716,7 +715,7 @@ def minimise_in_pocket(lig_mol: Chem.Mol, receptor_pdb_text: str, cutoff: float 
         "max_pocket_atom_displacement": round(float(pk_disp.max()), 3),
         "clashes_pose": _count_clashes(lig0, lg_elems, pk_frames[0], pk_elems),
         "clashes_min": _count_clashes(lig1, lg_elems, pk_frames[-1], pk_elems),
-        "n_frames": len(lig_frames), "energies": [round(e, 2) for e in energies],
+        "n_frames": len(lig_frames), "total_iterations": total_its, "energies": [round(e, 2) for e in energies],
         "frame_ligand_rmsd": [round(float(np.sqrt(np.mean(np.sum((f - lig0) ** 2, axis=1)))), 3) for f in lig_frames],
         "converged": bool(converged),
     }

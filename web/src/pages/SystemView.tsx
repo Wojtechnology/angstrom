@@ -5,7 +5,7 @@ import type { Data } from 'plotly.js-basic-dist-min'
 import { fetchIndex, fetchStructure, fetchSystem, isDocking, PB_CHECK_LABELS, PB_VALIDITY_CHECKS, rcsbUrl, type IndexData, type MethodDetail, type PocketMinimisation, type SystemDetail } from '../lib/api'
 import { fmt, RMSD_SUCCESS } from '../lib/stats'
 import { Checkbox, ErrorBox, Label, MethodBadge, Select, Spinner, Tip } from '../components/ui'
-import Viewer3D, { type HoveredAtom, type ViewerHandle } from '../components/Viewer3D'
+import Viewer3D, { type ClashRef, type HoveredAtom, type ViewerHandle } from '../components/Viewer3D'
 import Plot from '../components/Plot'
 
 interface Structures { gtReceptor: string; gtLigand: string; predReceptor: string | null; predLigand: string | null; predTraj: string | null; pocketTraj: string | null; pocketTrajPdb: string | null }
@@ -23,6 +23,8 @@ export default function SystemView() {
   const [showPredLigand, setShowPredLigand] = useState(true)
   const [showPredReceptor, setShowPredReceptor] = useState(true)
   const [hoveredAtom, setHoveredAtom] = useState<HoveredAtom | null>(null)
+  const [hoveredClash, setHoveredClash] = useState<ClashRef | null>(null)   // viewer -> panel
+  const [highlightClash, setHighlightClash] = useState<ClashRef | null>(null) // panel -> viewer
   const [showPocket, setShowPocket] = useState(true)
   const [showViolations, setShowViolations] = useState(true)
   const [trajectoryMode, setTrajectoryMode] = useState<TrajMode>('off')
@@ -78,6 +80,8 @@ export default function SystemView() {
   }, [playing, trajectoryMode, nFrames])
   useEffect(() => { setFrame(0); setPlaying(false); setHighlight(null); setHoveredAtom(null) }, [method])
   const onAtomHover = useCallback((a: HoveredAtom | null) => setHoveredAtom(a), [])
+  const onClashHover = useCallback((c: ClashRef | null) => setHoveredClash(c), [])
+  useEffect(() => { setHighlightClash(null); setHoveredClash(null) }, [method])
   useEffect(() => { setFrame(0); setPlaying(trajectoryMode !== 'off') }, [trajectoryMode])
 
   const energyPlot = useMemo<Data[]>(() => {
@@ -176,7 +180,9 @@ export default function SystemView() {
                 diagnostics={detail?.diagnostics}
                 atomDisplacement={trajectoryMode === 'pocket' ? pocket?.ligand_atom_displacement : detail?.minimisation?.atom_displacement}
                 highlightAtoms={highlight}
+                highlightClash={highlightClash}
                 onAtomHover={onAtomHover}
+                onClashHover={onClashHover}
               />
             ) : <Spinner label="Loading structures" />}
             <div className="absolute left-3 bottom-3 flex items-center gap-3 text-[11px] text-fg-2 bg-panel/85 backdrop-blur px-2.5 py-1.5 rounded-md border hairline">
@@ -221,7 +227,7 @@ export default function SystemView() {
             </div>
           )}
         </div>
-        {detail?.ok && detail.diagnostics && <DiagnosticsPanel d={detail.diagnostics} onHover={setHighlight} hoveredAtom={hoveredAtom?.index ?? null} />}
+        {detail?.ok && detail.diagnostics && <DiagnosticsPanel d={detail.diagnostics} onHover={setHighlight} onHoverClash={setHighlightClash} hoveredAtom={hoveredAtom?.index ?? null} hoveredClash={hoveredClash} />}
         </div>
 
         {/* side panel */}
@@ -326,21 +332,23 @@ function PocketCard({ pocket, gt, plot, showPlot }: { pocket: PocketMinimisation
   )
 }
 
-function DiagnosticsPanel({ d, onHover, hoveredAtom }: { d: NonNullable<MethodDetail['diagnostics']>; onHover: (atoms: number[] | null) => void; hoveredAtom: number | null }) {
+function DiagnosticsPanel({ d, onHover, onHoverClash, hoveredAtom, hoveredClash }: { d: NonNullable<MethodDetail['diagnostics']>; onHover: (atoms: number[] | null) => void; onHoverClash: (c: ClashRef | null) => void; hoveredAtom: number | null; hoveredClash: ClashRef | null }) {
   const s = d.summary
   const panel = useRef<HTMLDivElement>(null)
   // reverse hover: scroll the first sidebar entry containing the hovered viewer atom into view
   useEffect(() => {
-    if (hoveredAtom == null || !panel.current) return
+    if ((hoveredAtom == null && hoveredClash == null) || !panel.current) return
     const first = panel.current.querySelector<HTMLElement>('[data-hit="true"]')
     first?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }, [hoveredAtom])
-  const hit = (atoms: number[]) => hoveredAtom != null && atoms.includes(hoveredAtom)
-  const items: { label: string; count: number; atoms: number[][]; detail: (i: number) => string }[] = [
+  }, [hoveredAtom, hoveredClash])
+  const hit = (atoms: number[], clash?: ClashRef) =>
+    (hoveredClash != null && clash != null && hoveredClash.kind === clash.kind && hoveredClash.index === clash.index)
+    || (hoveredClash == null && hoveredAtom != null && atoms.includes(hoveredAtom))
+  const items: { label: string; count: number; atoms: number[][]; clashKind?: ClashRef['kind']; detail: (i: number) => string }[] = [
     { label: 'bond lengths off', count: s.bad_bonds, atoms: d.bonds.filter((b) => b.flag).map((b) => b.atoms), detail: (i) => { const b = d.bonds.filter((x) => x.flag)[i]; return `${b.pred} Å vs ${b.ref} Å in crystal (×${b.ratio})` } },
     { label: 'bond angles off', count: s.bad_angles, atoms: d.angles.map((a) => a.atoms), detail: (i) => `${d.angles[i].pred}° vs ${d.angles[i].ref}° (${d.angles[i].dev > 0 ? '+' : ''}${d.angles[i].dev}°)` },
-    { label: 'internal clashes', count: s.intra_clashes, atoms: d.intra_clashes.map((c) => c.atoms), detail: (i) => `${d.intra_clashes[i].dist} Å < ${d.intra_clashes[i].limit} Å` },
-    { label: 'protein clashes', count: s.protein_clashes, atoms: d.protein_clashes.map((c) => [c.atom]), detail: (i) => { const c = d.protein_clashes[i]; return `${c.protein.resname}${c.protein.resnum}:${c.protein.atom} at ${c.dist} Å (< ${c.limit})` } },
+    { label: 'internal clashes', count: s.intra_clashes, atoms: d.intra_clashes.map((c) => c.atoms), clashKind: 'intra', detail: (i) => `${d.intra_clashes[i].dist} Å < ${d.intra_clashes[i].limit} Å` },
+    { label: 'protein clashes', count: s.protein_clashes, atoms: d.protein_clashes.map((c) => [c.atom]), clashKind: 'protein', detail: (i) => { const c = d.protein_clashes[i]; return `${c.protein.resname}${c.protein.resnum}:${c.protein.atom} at ${c.dist} Å (< ${c.limit})` } },
     { label: 'stereo mismatches', count: s.stereo_mismatches, atoms: d.stereo.filter((x) => x.flag).map((x) => [x.atom]), detail: (i) => { const x = d.stereo.filter((y) => y.flag)[i]; return `${x.pred ?? '?'} predicted, ${x.ref ?? '?'} in crystal` } },
     { label: 'non-planar aromatic rings', count: s.nonplanar_rings, atoms: d.rings.filter((r) => r.flag).map((r) => r.atoms), detail: (i) => `${d.rings.filter((r) => r.flag)[i].max_dev} Å out of plane` },
   ]
@@ -361,11 +369,16 @@ function DiagnosticsPanel({ d, onHover, hoveredAtom }: { d: NonNullable<MethodDe
             </div>
             {it.count > 0 && (
               <div className={`pl-3 pb-1 flex flex-col gap-0.5 ${it.count > 12 ? 'overflow-y-auto pr-1' : ''}`} style={it.count > 12 ? { maxHeight: 260 } : undefined}>
-                {it.atoms.map((atoms, i) => (
-                  <div key={i} data-hit={hit(atoms) ? 'true' : undefined} className={`text-[11px] mono cursor-default hover:text-accent rounded px-1 -mx-1 border-l-2 ${hit(atoms) ? 'bg-warn-2 text-fg border-warn' : 'text-fg-2 border-transparent'}`} onMouseEnter={() => onHover(atoms)} onMouseLeave={() => onHover(null)}>
+                {it.atoms.map((atoms, i) => {
+                  const clash: ClashRef | undefined = it.clashKind ? { kind: it.clashKind, index: i } : undefined
+                  const on = hit(atoms, clash)
+                  return (
+                  <div key={i} data-hit={on ? 'true' : undefined} className={`text-[11px] mono cursor-default hover:text-accent rounded px-1 -mx-1 border-l-2 ${on ? 'bg-warn-2 text-fg border-warn' : 'text-fg-2 border-transparent'}`}
+                    onMouseEnter={() => { onHover(atoms); if (clash) onHoverClash(clash) }} onMouseLeave={() => { onHover(null); if (clash) onHoverClash(null) }}>
                     atoms {atoms.map((a) => a + 1).join('–')} · {it.detail(i)}
                   </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
