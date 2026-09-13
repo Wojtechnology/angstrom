@@ -720,3 +720,130 @@ def minimise_in_pocket(lig_mol: Chem.Mol, receptor_pdb_text: str, cutoff: float 
         "converged": bool(converged),
     }
     return summary, lig_frames, pk_frames_out, pocket_info, ligH
+
+
+# --------------------------------------------------------------------------- contacts & pocket hit
+from rdkit.Chem import Lipinski, rdShapeHelpers  # noqa: E402
+
+CONTACT_DIST = 4.0
+HBOND_DIST = 3.5
+PROTEIN_IONIC = {("ASP", "OD1"), ("ASP", "OD2"), ("GLU", "OE1"), ("GLU", "OE2"), ("LYS", "NZ"),
+                 ("ARG", "NH1"), ("ARG", "NH2"), ("ARG", "NE"), ("HIS", "ND1"), ("HIS", "NE2")}
+_IONIC_SMARTS = [Chem.MolFromSmarts(x) for x in (
+    "[CX3](=O)[O-,OX2H1]",            # carboxylate / carboxylic acid
+    "[CX3](=[NX2,NX3+])[NX3]",         # amidine / guanidine
+    "[NX3;H2,H1,H0;!$(NC=O);!$(N-a);!$(N-[SX4]);!$(NC=N)]([CX4])",  # basic aliphatic amine
+    "[PX4](=O)([O-,OX2H1])",           # phosphate / phosphonate
+    "[SX4](=O)(=O)[O-,OX2H1]",         # sulfonate / sulfate
+    "[+,-]",                           # explicit formal charge
+)]
+
+
+def best_atom_mapping(pred: Chem.Mol, ref: Chem.Mol) -> tuple:
+    """pred atom index -> ref atom index; among symmetry-equivalent matches pick the one with the
+    lowest RMSD on current coordinates (both heavy-atom molecules, same species)."""
+    pred, ref = Chem.RemoveHs(pred), Chem.RemoveHs(ref)
+    matches = ref.GetSubstructMatches(pred, uniquify=False, useChirality=False, maxMatches=2000)
+    if not matches:
+        return tuple(range(pred.GetNumAtoms()))
+    P, R = pred.GetConformer().GetPositions(), ref.GetConformer().GetPositions()
+    best, best_rmsd = matches[0], None
+    for m in matches:
+        r = float(np.sqrt(np.mean(np.sum((P - R[list(m)]) ** 2, axis=1))))
+        if best_rmsd is None or r < best_rmsd:
+            best, best_rmsd = m, r
+    return best
+
+
+def _ligand_atom_classes(mol: Chem.Mol):
+    """Per heavy atom: polar (H-bond donor/acceptor N,O), hydrophobic C, ionic-group member."""
+    mol = Chem.RemoveHs(mol)
+    n = mol.GetNumAtoms()
+    polar = set()
+    for patt in (Lipinski.HDonorSmarts, Lipinski.HAcceptorSmarts):
+        for m in mol.GetSubstructMatches(patt):
+            polar.update(i for i in m if mol.GetAtomWithIdx(i).GetSymbol() in ("N", "O"))
+    hydrophobic = {a.GetIdx() for a in mol.GetAtoms()
+                   if a.GetSymbol() == "C" and not any(nb.GetSymbol() in ("N", "O") for nb in a.GetNeighbors())}
+    ionic = set()
+    for patt in _IONIC_SMARTS:
+        for m in mol.GetSubstructMatches(patt):
+            ionic.update(i for i in m if mol.GetAtomWithIdx(i).GetSymbol() in ("N", "O", "P", "S"))
+    return {"polar": polar, "hydrophobic": hydrophobic, "ionic": ionic, "n": n}
+
+
+def ligand_contacts(lig_xyz: np.ndarray, lig_elems: list, classes: dict, protein_atoms: list) -> dict:
+    """{(ligand atom index, residue label): set(types)} for heavy-atom pairs within CONTACT_DIST."""
+    if not protein_atoms:
+        return {}
+    P = np.array([p[1] for p in protein_atoms])
+    P_el = [p[0] for p in protein_atoms]
+    P_res = [f"{p[2]}:{p[3]}{p[4]}" for p in protein_atoms]
+    P_ionic = [(p[3], p[5]) in PROTEIN_IONIC for p in protein_atoms]
+    out = {}
+    for i, x in enumerate(lig_xyz):
+        d = np.linalg.norm(P - x, axis=1)
+        for k in np.where(d <= CONTACT_DIST)[0]:
+            key = (i, P_res[k])
+            types = out.setdefault(key, {"any"})
+            el = P_el[k]
+            if i in classes["polar"] and el in ("N", "O") and d[k] <= HBOND_DIST:
+                types.add("hbond")
+            if i in classes["hydrophobic"] and el == "C":
+                types.add("hydrophobic")
+            if i in classes["ionic"] and P_ionic[k]:
+                types.add("ionic")
+    return out
+
+
+def _specific_type(types: set) -> str:
+    for t in ("ionic", "hbond", "hydrophobic"):
+        if t in types:
+            return t
+    return "any"
+
+
+def gt_contact_summary(gt_mol: Chem.Mol, protein_atoms: list) -> dict:
+    gt = Chem.RemoveHs(gt_mol)
+    classes = _ligand_atom_classes(gt)
+    c = ligand_contacts(gt.GetConformer().GetPositions(), [a.GetSymbol() for a in gt.GetAtoms()], classes, protein_atoms)
+    by_type = {t: sum(1 for v in c.values() if t in v) for t in ("any", "hbond", "hydrophobic", "ionic")}
+    return {"cutoff": CONTACT_DIST, "total": len(c), "by_type": by_type, "residues": sorted({r for _, r in c})}
+
+
+def contact_retention(pred_mol: Chem.Mol, gt_mol: Chem.Mol, protein_atoms: list) -> dict:
+    """Which crystal-ligand contacts (ligand atom, residue) the predicted pose reproduces, both
+    measured against the crystal receptor in the crystal frame."""
+    gt, pred = Chem.RemoveHs(gt_mol), Chem.RemoveHs(pred_mol)
+    classes = _ligand_atom_classes(gt)
+    gt_c = ligand_contacts(gt.GetConformer().GetPositions(), [a.GetSymbol() for a in gt.GetAtoms()], classes, protein_atoms)
+    mapping = best_atom_mapping(pred, gt)  # pred idx -> gt idx
+    ppos = pred.GetConformer().GetPositions()
+    xyz = np.zeros_like(gt.GetConformer().GetPositions())
+    for i, j in enumerate(mapping):
+        xyz[j] = ppos[i]
+    pred_c = ligand_contacts(xyz, [a.GetSymbol() for a in gt.GetAtoms()], classes, protein_atoms)
+    types = ("any", "hbond", "hydrophobic", "ionic")
+    by_type = {t: {"gt": sum(1 for v in gt_c.values() if t in v),
+                   "kept": sum(1 for k, v in gt_c.items() if t in v and k in pred_c and t in pred_c[k])} for t in types}
+    residues_gt = {r for _, r in gt_c}
+    residues_pred = {r for _, r in pred_c}
+    return {
+        "cutoff": CONTACT_DIST, "gt_total": len(gt_c), "kept": by_type["any"]["kept"],
+        "retention": (round(by_type["any"]["kept"] / len(gt_c), 3) if gt_c else None),
+        "by_type": by_type,
+        "residues": [{"residue": r, "gt": r in residues_gt, "pred": r in residues_pred} for r in sorted(residues_gt | residues_pred)],
+        "lost": [{"ligand_atom": int(k[0]), "residue": k[1], "type": _specific_type(v)} for k, v in sorted(gt_c.items()) if k not in pred_c],
+        "new": [{"ligand_atom": int(k[0]), "residue": k[1], "type": _specific_type(v)} for k, v in sorted(pred_c.items()) if k not in gt_c],
+    }
+
+
+def pocket_hit(pred_mol: Chem.Mol, gt_mol: Chem.Mol) -> dict:
+    """Did the pose land in the right pocket at all? Shape overlap on current coordinates + centroid distance."""
+    pred, gt = Chem.RemoveHs(pred_mol), Chem.RemoveHs(gt_mol)
+    try:
+        overlap = 1.0 - float(rdShapeHelpers.ShapeTanimotoDist(pred, gt))
+    except Exception:  # noqa
+        overlap = 0.0
+    cd = float(np.linalg.norm(pred.GetConformer().GetPositions().mean(0) - gt.GetConformer().GetPositions().mean(0)))
+    return {"shape_overlap": round(overlap, 3), "centroid_distance": round(cd, 2), "hit": bool(overlap >= 0.05 or cd <= 4.0)}

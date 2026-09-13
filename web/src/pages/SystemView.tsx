@@ -194,7 +194,6 @@ export default function SystemView() {
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: color }} />{methodName(index, method)}</span>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-ok" />ground truth</span>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-bad/50" />violation</span>
-              {hoveredAtom && <span className="mono text-fg">{hoveredAtom.elem}{hoveredAtom.index + 1}</span>}
             </div>
           </div>
           {/* control strip */}
@@ -232,7 +231,7 @@ export default function SystemView() {
             </div>
           )}
         </div>
-        {detail?.ok && detail.diagnostics && <DiagnosticsPanel d={detail.diagnostics} contacts={detail.contacts ?? null} onHover={setHighlight} onHoverClash={setHighlightClash} onHoverContact={onContactHover} hoveredAtom={hoveredAtom?.index ?? null} hoveredClash={hoveredClash} />}
+        {detail?.ok && detail.diagnostics && <DiagnosticsPanel d={detail.diagnostics} contacts={detail.contacts ?? null} onHover={setHighlight} onHoverClash={setHighlightClash} onHoverContact={onContactHover} hoveredAtom={highlight ? null : hoveredAtom?.index ?? null} hoveredClash={highlight ? null : hoveredClash} />}
         </div>
 
         {/* side panel */}
@@ -358,7 +357,7 @@ function DiagnosticsPanel({ d, contacts, onHover, onHoverClash, onHoverContact, 
   useEffect(() => {
     if ((hoveredAtom == null && hoveredClash == null) || !panel.current) return
     const first = panel.current.querySelector<HTMLElement>('[data-hit="true"]')
-    first?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    first?.scrollIntoView({ block: 'nearest' })
   }, [hoveredAtom, hoveredClash])
   const hit = (atoms: number[], clash?: ClashRef) =>
     (hoveredClash != null && clash != null && hoveredClash.kind === clash.kind && hoveredClash.index === clash.index)

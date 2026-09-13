@@ -215,7 +215,7 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
             prev_gt = {}
     gt_files = {"receptor": "gt_receptor.pdb", "ligand": "gt_ligand.sdf", "traj": "gt_traj.sdf",
                 "pocket_traj": "gt_pocket_traj.sdf", "pocket_traj_pdb": "gt_pocket_traj.pdb"}
-    if prev_gt.get("pocket_minimisation", {}).get("ok") and (sdir / "gt_pocket_traj.pdb.gz").exists():
+    if prev_gt.get("pocket_minimisation", {}).get("ok") and "contacts" in prev_gt and (sdir / "gt_pocket_traj.pdb.gz").exists():
         gt_block = prev_gt  # ground-truth analysis is deterministic; reuse it
     else:
         gz_write(sdir / "gt_receptor.pdb.gz", gt_rec.to_pdb())
@@ -230,7 +230,8 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
         gt_prot_atoms = list(gt_rec.heavy_atoms())
         pocket = sorted({f"{ch}:{resn}{resi}" for el, xyz, ch, resn, resi, an in gt_prot_atoms
                          if np.min(np.linalg.norm(gt_xyz - xyz, axis=1)) <= st.CONTACT_CUTOFF})
-        gt_block = {"minimisation": gt_min, "pocket_minimisation": gt_pocket, "files": gt_files, "pocket_residues": pocket}
+        gt_block = {"minimisation": gt_min, "pocket_minimisation": gt_pocket, "files": gt_files, "pocket_residues": pocket,
+                    "contacts": st.gt_contact_summary(gt_mol, gt_prot_atoms)}
 
     detail = {**meta, "gt": gt_block,
               "methods": {k: v for k, v in existing.items() if k not in {m["id"] for m in method_list}}}
@@ -245,7 +246,7 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
         row = method_rows.get(mid)
         res = {"ok": False}
         prev = existing.get(mid)
-        if prev and prev.get("ok") and (prev.get("pocket_minimisation") or {}).get("ok") and (sdir / f"{mid}_ligand.sdf.gz").exists():
+        if prev and prev.get("ok") and (prev.get("pocket_minimisation") or {}).get("ok") and "contacts" in prev and (sdir / f"{mid}_ligand.sdf.gz").exists():
             detail["methods"][mid] = prev
             continue
         try:
@@ -280,6 +281,9 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
             rmsd = st.symmetry_rmsd(lig, gt_mol)
             prot_atoms = list(pred_rec.heavy_atoms())
             diag = st.ligand_diagnostics(lig, gt_mol, prot_atoms)
+            gt_atoms_for_contacts = prot_atoms if m["kind"] == "docking" else list(gt_rec.heavy_atoms())
+            contacts = st.contact_retention(lig, gt_mol, gt_atoms_for_contacts)
+            hit = st.pocket_hit(lig, gt_mol)
             pdb_text = pred_rec.to_pdb()
             rec_path = work / f"{mid}_receptor.pdb"
             rec_path.write_text(pdb_text)
@@ -307,7 +311,7 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
                 "lddt_lp": _f(row.get("lddt_lp")), "bb_rmsd": _f(row.get("bb_rmsd")),
                 "superposition": {k: (round(v, 3) if isinstance(v, float) else v) for k, v in sup.items() if k not in ("R", "t")},
                 "posebusters": pb_res, "pb_pass": pb_pass, "diagnostics": diag, "minimisation": minim,
-                "pocket_minimisation": pocket_min,
+                "pocket_minimisation": pocket_min, "contacts": contacts, "pocket_hit": hit,
                 "files": {"receptor": f"{mid}_receptor.pdb", "ligand": f"{mid}_ligand.sdf", "traj": f"{mid}_traj.sdf",
                           "pocket_traj": f"{mid}_pocket_traj.sdf", "pocket_traj_pdb": f"{mid}_pocket_traj.pdb"},
                 "model_file": str(path.relative_to(RAW)),
@@ -416,6 +420,10 @@ def main():
                 "e_interaction_pose": pm.get("e_interaction_pose"), "e_interaction_min": pm.get("e_interaction_min"),
                 "pocket_ligand_drift": pm.get("ligand_rmsd_drift"), "clashes_pose": pm.get("clashes_pose"), "clashes_min": pm.get("clashes_min"),
                 "vina_score": r.get("vina_score"),
+                "contact_retention": (r.get("contacts") or {}).get("retention"),
+                "shape_overlap": (r.get("pocket_hit") or {}).get("shape_overlap"),
+                "centroid_distance": (r.get("pocket_hit") or {}).get("centroid_distance"),
+                "pocket_hit": (r.get("pocket_hit") or {}).get("hit"),
             })
     index = {
         "generated": time.strftime("%Y-%m-%d %H:%M"),
