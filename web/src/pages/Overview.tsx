@@ -185,10 +185,10 @@ export default function Overview() {
       <div className="text-[12px] text-fg-3 -mt-2">{metricD.description}</div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="card p-4">
-          <div className="flex items-baseline justify-between mb-1 gap-2">
-            <h2 className="font-medium truncate">{metricD.kind === 'rate' ? metricD.short.replace(/^% /, '') : metricD.short} by similarity to the closest training structure</h2>
-            <span className="text-[11px] text-fg-3 whitespace-nowrap">training cutoff {data.default_cutoff} · {systems.length} systems</span>
+        <div className="card p-4 min-w-0">
+          <div className="flex items-baseline justify-between mb-1 gap-2 flex-wrap">
+            <h2 className="font-medium min-w-0">{metricD.kind === 'rate' ? metricD.short.replace(/^% /, '') : metricD.short} by similarity to the closest training structure</h2>
+            <span className="text-[11px] text-fg-3">training cutoff {data.default_cutoff} · {systems.length} systems</span>
           </div>
           <Plot
             data={bucketPlot}
@@ -199,9 +199,9 @@ export default function Overview() {
             }}
           />
         </div>
-        <div className="card p-4">
+        <div className="card p-4 min-w-0">
           <div className="flex items-center justify-between mb-1 gap-2 flex-wrap">
-            <h2 className="font-medium">{yDef.label.replace(/ \(.*\)$/, '')} vs. similarity to the closest training structure</h2>
+            <h2 className="font-medium min-w-0">{yDef.label.replace(/ \(.*\)$/, '')} vs. similarity to the closest training structure</h2>
             <div className="flex items-center gap-2">
               <span className="text-[11px] text-fg-3 hidden xl:inline">click a point to open it</span>
               <Select value={scatterY} onChange={setScatterY} options={yOptions} width={210} />

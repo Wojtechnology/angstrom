@@ -89,7 +89,7 @@ export function Label({ children }: { children: ReactNode }) {
 export function Stat({ label, value, sub }: { label: ReactNode; value: ReactNode; sub?: ReactNode }) {
   return (
     <div className="card px-4 py-3 min-w-0">
-      <div className="text-[11px] text-fg-3 font-medium truncate">{label}</div>
+      <div className="text-[11px] text-fg-3 font-medium">{label}</div>
       <div className="text-[20px] font-semibold tracking-tight mt-0.5 tabular-nums">{value}</div>
       {sub && <div className="text-[11px] text-fg-3 mt-0.5 truncate">{sub}</div>}
     </div>
