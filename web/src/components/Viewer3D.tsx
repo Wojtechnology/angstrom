@@ -13,12 +13,14 @@ export interface ViewerProps {
   predReceptor?: string | null
   predLigand?: string | null
   predTraj?: string | null
+  pocketTraj?: string | null
+  pocketTrajPdb?: string | null
   predColor: string
   showPredReceptor: boolean
   showGtLigand: boolean
   showPocket: boolean
   showViolations: boolean
-  trajectoryMode: boolean
+  trajectoryMode: 'off' | 'ligand' | 'pocket'
   frame: number
   diagnostics?: Diagnostics | null
   atomDisplacement?: number[] | null
@@ -36,7 +38,7 @@ const GT_LIGAND = '#2f9e6b'
 const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, ref) {
   const el = useRef<HTMLDivElement>(null)
   const viewer = useRef<$3Dmol.GLViewer | null>(null)
-  const models = useRef<{ gtRec?: $3Dmol.GLModel; gtLig?: $3Dmol.GLModel; predRec?: $3Dmol.GLModel; predLig?: $3Dmol.GLModel; traj?: $3Dmol.GLModel }>({})
+  const models = useRef<Models>({})
   const loadedKey = useRef<string>('')
   const propsRef = useRef(props)
   propsRef.current = props
@@ -51,7 +53,7 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     },
     setFrame: (i: number) => {
       const v = viewer.current
-      if (v && models.current.traj) { v.setFrame(i); v.render() }
+      if (v && (models.current.traj || models.current.pocketTraj)) { v.setFrame(i); v.render() }
     },
   }))
 
@@ -76,7 +78,7 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
   useEffect(() => {
     const v = viewer.current
     if (!v) return
-    const key = [props.gtReceptor.length, props.gtLigand.length, props.predReceptor?.length, props.predLigand?.length, props.predTraj?.length, props.predColor].join('|')
+    const key = [props.gtReceptor.length, props.gtLigand.length, props.predReceptor?.length, props.predLigand?.length, props.predTraj?.length, props.pocketTraj?.length, props.pocketTrajPdb?.length, props.predColor].join('|')
     if (key === loadedKey.current) return
     loadedKey.current = key
     v.removeAllModels(); v.removeAllShapes(); v.removeAllLabels()
@@ -86,12 +88,14 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     if (props.predReceptor) m.predRec = v.addModel(props.predReceptor, 'pdb')
     if (props.predLigand) m.predLig = v.addModel(props.predLigand, 'sdf')
     if (props.predTraj) m.traj = v.addModelsAsFrames(props.predTraj, 'sdf')
+    if (props.pocketTraj) m.pocketTraj = v.addModelsAsFrames(props.pocketTraj, 'sdf')
+    if (props.pocketTrajPdb) m.pocketRec = v.addModelsAsFrames(props.pocketTrajPdb, 'pdb')
     models.current = m
     styleAll(v, m, propsRef.current)
     v.zoomTo({ model: m.predLig ?? m.gtLig })
     v.zoom(0.8)
     v.render()
-  }, [props.gtReceptor, props.gtLigand, props.predReceptor, props.predLigand, props.predTraj, props.predColor])
+  }, [props.gtReceptor, props.gtLigand, props.predReceptor, props.predLigand, props.predTraj, props.pocketTraj, props.pocketTrajPdb, props.predColor])
 
   // restyle on toggles
   useEffect(() => {
@@ -103,7 +107,8 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
 
   useEffect(() => {
     const v = viewer.current
-    if (!v || !models.current.traj || !props.trajectoryMode) return
+    if (!v || props.trajectoryMode === 'off') return
+    if (!models.current.traj && !models.current.pocketTraj) return
     v.setFrame(props.frame); v.render()
   }, [props.frame, props.trajectoryMode])
 
@@ -117,15 +122,21 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
 
 export default Viewer3D
 
-function styleAll(v: $3Dmol.GLViewer, m: { gtRec?: $3Dmol.GLModel; gtLig?: $3Dmol.GLModel; predRec?: $3Dmol.GLModel; predLig?: $3Dmol.GLModel; traj?: $3Dmol.GLModel }, p: ViewerProps) {
+type Models = { gtRec?: $3Dmol.GLModel; gtLig?: $3Dmol.GLModel; predRec?: $3Dmol.GLModel; predLig?: $3Dmol.GLModel; traj?: $3Dmol.GLModel; pocketTraj?: $3Dmol.GLModel; pocketRec?: $3Dmol.GLModel }
+
+function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
   v.removeAllShapes()
   v.removeAllLabels()
   const hide: $3Dmol.AtomStyleSpec = {}  // empty style = not drawn
 
-  // ground-truth receptor: light cartoon; pocket residues as thin sticks
+  const pocketMode = p.trajectoryMode === 'pocket' && !!m.pocketTraj
+  const ligandMode = p.trajectoryMode === 'ligand' && !!m.traj
+  const showTraj = pocketMode || ligandMode
+
+  // ground-truth receptor: light cartoon; pocket residues as thin sticks (static ones hidden while the pocket animates)
   if (m.gtRec) {
     v.setStyle({ model: m.gtRec }, { cartoon: { color: '#d9d9de', opacity: 0.9 } })
-    if (p.showPocket && m.gtLig) {
+    if (p.showPocket && m.gtLig && !pocketMode) {
       v.addStyle({ model: m.gtRec, within: { distance: 4.5, sel: { model: m.predLig ?? m.gtLig } } } as $3Dmol.AtomSelectionSpec, { stick: { radius: 0.12, colorscheme: 'whiteCarbon' } })
     }
   }
@@ -135,15 +146,21 @@ function styleAll(v: $3Dmol.GLViewer, m: { gtRec?: $3Dmol.GLModel; gtLig?: $3Dmo
   if (m.gtLig) {
     v.setStyle({ model: m.gtLig }, p.showGtLigand ? { stick: { radius: 0.18, colorscheme: { prop: 'elem', map: elemMap(GT_LIGAND) } } } : hide)
   }
-  const showTraj = p.trajectoryMode && !!m.traj
   if (m.predLig) {
     v.setStyle({ model: m.predLig }, showTraj ? hide : { stick: { radius: 0.22, colorscheme: { prop: 'elem', map: elemMap(p.predColor) } } })
   }
   if (m.traj) {
-    v.setStyle({ model: m.traj }, showTraj ? { stick: { radius: 0.22, colorscheme: { prop: 'elem', map: elemMap(p.predColor) } } } : hide)
+    v.setStyle({ model: m.traj }, ligandMode ? { stick: { radius: 0.22, colorscheme: { prop: 'elem', map: elemMap(p.predColor) } } } : hide)
+  }
+  if (m.pocketTraj) {
+    v.setStyle({ model: m.pocketTraj }, pocketMode ? { stick: { radius: 0.22, colorscheme: { prop: 'elem', map: elemMap(p.predColor) } } } : hide)
+  }
+  if (m.pocketRec) {
+    // animated pocket heavy atoms (protein restrained, so they move only slightly)
+    v.setStyle({ model: m.pocketRec }, pocketMode ? { stick: { radius: 0.12, colorscheme: 'whiteCarbon' } } : hide)
   }
 
-  const lig = showTraj ? m.traj : m.predLig
+  const lig = pocketMode ? m.pocketTraj : ligandMode ? m.traj : m.predLig
   if (!lig) return
 
   if (p.showViolations && p.diagnostics && !showTraj) {

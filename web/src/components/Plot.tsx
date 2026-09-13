@@ -29,12 +29,11 @@ export default function Plot({ data, layout, height = 260, onClick }: { data: Da
     }
     // StrictMode mounts/unmounts twice in dev; a purge between the two makes the first
     // react() promise reject when it tries to emit on the purged element. Harmless.
-    Plotly.react(el, data, merged, CONFIG).catch(() => {})
-    const handler = (e: Plotly.PlotMouseEvent) => onClick?.(e)
-    if (onClick) (el as unknown as Plotly.PlotlyHTMLElement).on('plotly_click', handler)
-    return () => {
-      if (onClick) (el as unknown as Plotly.PlotlyHTMLElement).removeAllListeners?.('plotly_click')
-    }
+    const gd = el as unknown as Plotly.PlotlyHTMLElement
+    Plotly.react(el, data, merged, CONFIG).then(() => {
+      if (onClick && typeof gd.on === 'function') { gd.removeAllListeners?.('plotly_click'); gd.on('plotly_click', onClick) }
+    }).catch(() => {})
+    return () => { gd.removeAllListeners?.('plotly_click') }
   }, [data, layout, height, onClick])
   useEffect(() => {
     const el = ref.current

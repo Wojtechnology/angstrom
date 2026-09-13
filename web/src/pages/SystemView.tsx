@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, ExternalLink, Pause, Play, Focus, Check, X, Minus } from 'lucide-react'
 import type { Data } from 'plotly.js-basic-dist-min'
-import { fetchIndex, fetchStructure, fetchSystem, PB_CHECK_LABELS, PB_VALIDITY_CHECKS, rcsbUrl, type IndexData, type MethodDetail, type SystemDetail } from '../lib/api'
+import { fetchIndex, fetchStructure, fetchSystem, PB_CHECK_LABELS, PB_VALIDITY_CHECKS, rcsbUrl, type IndexData, type MethodDetail, type PocketMinimisation, type SystemDetail } from '../lib/api'
 import { fmt, RMSD_SUCCESS } from '../lib/stats'
-import { ErrorBox, Label, Spinner, Switch, Tip } from '../components/ui'
+import { ErrorBox, Label, Select, Spinner, Switch, Tip } from '../components/ui'
 import Viewer3D, { type ViewerHandle } from '../components/Viewer3D'
 import Plot from '../components/Plot'
 
-interface Structures { gtReceptor: string; gtLigand: string; predReceptor: string | null; predLigand: string | null; predTraj: string | null }
+interface Structures { gtReceptor: string; gtLigand: string; predReceptor: string | null; predLigand: string | null; predTraj: string | null; pocketTraj: string | null; pocketTrajPdb: string | null }
+type TrajMode = 'off' | 'ligand' | 'pocket'
 
 export default function SystemView() {
   const { id = '' } = useParams()
@@ -21,7 +22,7 @@ export default function SystemView() {
   const [showGtLigand, setShowGtLigand] = useState(true)
   const [showPocket, setShowPocket] = useState(true)
   const [showViolations, setShowViolations] = useState(true)
-  const [trajectoryMode, setTrajectoryMode] = useState(false)
+  const [trajectoryMode, setTrajectoryMode] = useState<TrajMode>('off')
   const [playing, setPlaying] = useState(false)
   const [frame, setFrame] = useState(0)
   const [highlight, setHighlight] = useState<number[] | null>(null)
@@ -54,20 +55,26 @@ export default function SystemView() {
       files ? fetchStructure(id, files.receptor) : Promise.resolve(null),
       files ? fetchStructure(id, files.ligand) : Promise.resolve(null),
       files ? fetchStructure(id, files.traj).catch(() => null) : Promise.resolve(null),
-    ]).then(([gtReceptor, gtLigand, predReceptor, predLigand, predTraj]) => {
-      if (!cancelled) setStructures({ gtReceptor, gtLigand, predReceptor, predLigand, predTraj })
+      files?.pocket_traj ? fetchStructure(id, files.pocket_traj).catch(() => null) : Promise.resolve(null),
+      files?.pocket_traj_pdb ? fetchStructure(id, files.pocket_traj_pdb).catch(() => null) : Promise.resolve(null),
+    ]).then(([gtReceptor, gtLigand, predReceptor, predLigand, predTraj, pocketTraj, pocketTrajPdb]) => {
+      if (!cancelled) setStructures({ gtReceptor, gtLigand, predReceptor, predLigand, predTraj, pocketTraj, pocketTrajPdb })
     }).catch(setError)
     return () => { cancelled = true }
   }, [sys, method, id])
 
   // trajectory playback
-  const nFrames = detail?.minimisation?.n_frames ?? 0
+  const pocket = detail?.pocket_minimisation?.ok ? detail.pocket_minimisation : null
+  const hasPocketTraj = !!pocket && !!detail?.files?.pocket_traj
+  const activeRun = trajectoryMode === 'pocket' ? pocket : trajectoryMode === 'ligand' ? detail?.minimisation ?? null : null
+  const nFrames = activeRun?.n_frames ?? 0
   useEffect(() => {
-    if (!playing || !trajectoryMode || nFrames < 2) return
+    if (!playing || trajectoryMode === 'off' || nFrames < 2) return
     const t = setInterval(() => setFrame((f) => (f + 1) % nFrames), 120)
     return () => clearInterval(t)
   }, [playing, trajectoryMode, nFrames])
   useEffect(() => { setFrame(0); setPlaying(false); setHighlight(null) }, [method])
+  useEffect(() => { setFrame(0); setPlaying(trajectoryMode !== 'off') }, [trajectoryMode])
 
   const energyPlot = useMemo<Data[]>(() => {
     if (!detail?.minimisation) return []
@@ -76,9 +83,19 @@ export default function SystemView() {
     const rel = (e: number[]) => e.map((x) => x - e[e.length - 1])
     const out: Data[] = [{ type: 'scatter', mode: 'lines', name: 'prediction', x: m.energies.map((_, i) => i), y: rel(m.energies), line: { color: methodColor(index, method), width: 2 }, hovertemplate: 'frame %{x}: +%{y:.1f} kcal/mol<extra></extra>' }]
     if (gt) out.push({ type: 'scatter', mode: 'lines', name: 'ground truth', x: gt.energies.map((_, i) => i), y: rel(gt.energies), line: { color: '#2f9e6b', width: 1.5, dash: 'dot' }, hovertemplate: 'frame %{x}: +%{y:.1f} kcal/mol<extra></extra>' })
-    if (trajectoryMode) out.push({ type: 'scatter', mode: 'markers', name: 'current', x: [frame], y: [rel(m.energies)[frame]], marker: { color: '#1c1c22', size: 8 }, showlegend: false, hoverinfo: 'skip' })
+    if (trajectoryMode === 'ligand') out.push({ type: 'scatter', mode: 'markers', name: 'current', x: [frame], y: [rel(m.energies)[frame]], marker: { color: '#1c1c22', size: 8 }, showlegend: false, hoverinfo: 'skip' })
     return out
   }, [detail, sys, frame, trajectoryMode, index, method])
+
+  const pocketPlot = useMemo<Data[]>(() => {
+    if (!pocket) return []
+    const gt = sys?.gt.pocket_minimisation?.ok ? sys.gt.pocket_minimisation : null
+    const rel = (e: number[]) => e.map((x) => x - e[e.length - 1])
+    const out: Data[] = [{ type: 'scatter', mode: 'lines', name: 'prediction', x: pocket.energies.map((_, i) => i), y: rel(pocket.energies), line: { color: methodColor(index, method), width: 2 }, hovertemplate: 'frame %{x}: +%{y:.1f} kcal/mol<extra></extra>' }]
+    if (gt) out.push({ type: 'scatter', mode: 'lines', name: 'ground truth', x: gt.energies.map((_, i) => i), y: rel(gt.energies), line: { color: '#2f9e6b', width: 1.5, dash: 'dot' }, hovertemplate: 'frame %{x}: +%{y:.1f} kcal/mol<extra></extra>' })
+    if (trajectoryMode === 'pocket') out.push({ type: 'scatter', mode: 'markers', name: 'current', x: [frame], y: [rel(pocket.energies)[frame]], marker: { color: '#1c1c22', size: 8 }, showlegend: false, hoverinfo: 'skip' })
+    return out
+  }, [pocket, sys, frame, trajectoryMode, index, method])
 
   if (error) return <ErrorBox error={error} />
   if (!index || !sys || !method) return <Spinner label="Loading system" />
@@ -129,7 +146,15 @@ export default function SystemView() {
             <Switch checked={showPredReceptor} onChange={setShowPredReceptor} label="predicted receptor" />
             <Switch checked={showPocket} onChange={setShowPocket} label="pocket residues" />
             <Switch checked={showViolations} onChange={setShowViolations} label="violations" />
-            <Switch checked={trajectoryMode} onChange={(v) => { setTrajectoryMode(v); setPlaying(v) }} label="minimisation trajectory" />
+            <span className="flex items-center gap-2 text-[12px] text-fg-2">
+              trajectory
+              <Select<TrajMode>
+                value={trajectoryMode}
+                onChange={setTrajectoryMode}
+                width={150}
+                options={[{ value: 'off', label: 'off' }, { value: 'ligand', label: 'ligand only' }, ...(hasPocketTraj ? [{ value: 'pocket' as TrajMode, label: 'ligand + pocket' }] : [])]}
+              />
+            </span>
             <button className="btn ml-auto" style={{ border: 'none' }} onClick={() => viewer.current?.zoomToLigand()}><Focus size={13} /> ligand</button>
           </div>
           <div className="relative" style={{ height: 520 }}>
@@ -141,6 +166,8 @@ export default function SystemView() {
                 predReceptor={structures.predReceptor}
                 predLigand={structures.predLigand}
                 predTraj={structures.predTraj}
+                pocketTraj={structures.pocketTraj}
+                pocketTrajPdb={structures.pocketTrajPdb}
                 predColor={color}
                 showPredReceptor={showPredReceptor}
                 showGtLigand={showGtLigand}
@@ -149,7 +176,7 @@ export default function SystemView() {
                 trajectoryMode={trajectoryMode}
                 frame={frame}
                 diagnostics={detail?.diagnostics}
-                atomDisplacement={detail?.minimisation?.atom_displacement}
+                atomDisplacement={trajectoryMode === 'pocket' ? pocket?.ligand_atom_displacement : detail?.minimisation?.atom_displacement}
                 highlightAtoms={highlight}
               />
             ) : <Spinner label="Loading structures" />}
@@ -159,12 +186,12 @@ export default function SystemView() {
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-bad/50" />violation</span>
             </div>
           </div>
-          {trajectoryMode && detail?.minimisation && (
+          {trajectoryMode !== 'off' && activeRun && (
             <div className="border-t hairline px-4 py-3 grid gap-3 md:grid-cols-[auto_1fr_auto] items-center">
               <button className="btn" onClick={() => setPlaying((p) => !p)}>{playing ? <Pause size={13} /> : <Play size={13} />}{playing ? 'pause' : 'play'}</button>
               <input type="range" min={0} max={Math.max(0, nFrames - 1)} value={frame} onChange={(e) => { setPlaying(false); setFrame(Number(e.target.value)) }} className="w-full accent-[#5e6ad2]" />
               <span className="mono text-fg-2 whitespace-nowrap">
-                frame {frame + 1}/{nFrames} · ΔE {fmt(detail.minimisation.energies[frame] - detail.minimisation.e_local, 1)} kcal/mol · moved {fmt(detail.minimisation.frame_rmsd[frame])} Å
+                {trajectoryMode === 'pocket' ? 'ligand + pocket' : 'ligand only'} · frame {frame + 1}/{nFrames} · ΔE {fmt(activeRun.energies[frame] - activeRun.energies[activeRun.energies.length - 1], 1)} kcal/mol · ligand moved {fmt(('frame_ligand_rmsd' in activeRun ? activeRun.frame_ligand_rmsd : activeRun.frame_rmsd)[frame])} Å
               </span>
             </div>
           )}
@@ -187,6 +214,8 @@ export default function SystemView() {
                   seed {String(detail.seed)} · sample {String(detail.sample)} · ranking score {fmt(detail.ranking_score, 3)} · benchmark RMSD {fmt(detail.rmsd_ref)} Å
                 </div>
               </div>
+
+              <PocketCard pocket={detail.pocket_minimisation ?? null} gt={sys.gt.pocket_minimisation ?? null} plot={pocketPlot} showPlot={trajectoryMode === 'pocket'} />
 
               <div className="card px-4 py-3">
                 <div className="flex items-center justify-between">
@@ -230,6 +259,38 @@ export default function SystemView() {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+function PocketCard({ pocket, gt, plot, showPlot }: { pocket: PocketMinimisation | null; gt: PocketMinimisation | null; plot: Data[]; showPlot: boolean }) {
+  const ok = !!pocket?.ok
+  const gtOk = !!gt?.ok
+  const clashing = ok && pocket!.e_interaction_pose > 0
+  return (
+    <div className="card px-4 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <Label>Pocket relaxation (MMFF94s, protein pocket restrained)</Label>
+        {gtOk && <span className="chip chip-muted whitespace-nowrap" title="ground-truth complex, same protocol">GT {fmt(gt!.e_interaction_pose, 1)} → {fmt(gt!.e_interaction_min, 1)} kcal/mol</span>}
+      </div>
+      {!ok ? (
+        <div className="text-fg-3 mt-2">not available{pocket?.error ? `: ${pocket.error}` : ''}</div>
+      ) : (
+        <>
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <span className={`chip ${clashing ? 'chip-bad' : 'chip-ok'}`}>{clashing ? 'clashing' : 'favourable'} interaction at pose</span>
+            <span className={`chip ${pocket!.clashes_pose > 0 ? 'chip-bad' : 'chip-muted'}`}>{pocket!.clashes_pose} clash{pocket!.clashes_pose === 1 ? '' : 'es'} → {pocket!.clashes_min} after relaxation</span>
+          </div>
+          <div className="grid grid-cols-3 gap-3 mt-3">
+            <Metric label="interaction E" value={`${fmt(pocket!.e_interaction_pose, 1)} → ${fmt(pocket!.e_interaction_min, 1)}`} sub="kcal/mol pose → min" good={clashing ? false : undefined} />
+            <Metric label="ligand drift" value={`${fmt(pocket!.ligand_rmsd_drift)} Å`} sub={`max atom ${fmt(Math.max(0, ...pocket!.ligand_atom_displacement))} Å`} />
+            <Metric label="pocket RMSD" value={`${fmt(pocket!.pocket_heavy_rmsd)} Å`} sub={`${pocket!.n_pocket_residues} residues · max ${fmt(pocket!.max_pocket_atom_displacement)} Å`} />
+          </div>
+          {showPlot && (
+            <div className="mt-2 -mx-2"><Plot data={plot} height={150} layout={{ margin: { l: 40, r: 8, t: 24, b: 28 }, yaxis: { title: { text: 'kcal/mol above min' } }, xaxis: { title: { text: 'frame' } }, legend: { orientation: 'h', y: 1.3, x: 0 } }} /></div>
+          )}
+        </>
+      )}
     </div>
   )
 }

@@ -454,3 +454,224 @@ def mol_to_sdf(mol: Chem.Mol, name: str = "") -> str:
     if name:
         m.SetProp("_Name", name)
     return Chem.MolToMolBlock(m) + "$$$$\n"
+
+
+# --------------------------------------------------------------------------- pocket minimisation
+def _count_clashes(lig_xyz, lig_elems, pk_xyz, pk_elems) -> int:
+    n = 0
+    for i, p in enumerate(lig_xyz):
+        d = np.linalg.norm(pk_xyz - p, axis=1)
+        ri = VDW.get(lig_elems[i], 1.7)
+        lim = CLASH_RATIO * (ri + np.array([VDW.get(e, 1.7) for e in pk_elems]))
+        n += int(np.sum(d < lim))
+    return n
+
+
+def _pdb_atom_line(serial, name, resname, chain, resnum, icode, xyz, elem):
+    nm = name if len(name) == 4 else f" {name:<3s}"
+    return (f"ATOM  {serial:5d} {nm:4s} {resname:>3s} {chain:1s}{resnum:4d}{icode:1s}   "
+            f"{xyz[0]:8.3f}{xyz[1]:8.3f}{xyz[2]:8.3f}  1.00  0.00          {elem:>2s}\n")
+
+
+def pocket_frames_to_pdb(pocket_info: list, frames: list) -> str:
+    """Multi-MODEL PDB of pocket heavy atoms, one MODEL per minimisation frame.
+
+    pocket_info: list of (name, resname, chain, resnum, icode, element) per pocket heavy atom.
+    """
+    out = []
+    for k, f in enumerate(frames):
+        out.append(f"MODEL     {k + 1:4d}\n")
+        for s, (info, xyz) in enumerate(zip(pocket_info, f), start=1):
+            out.append(_pdb_atom_line(s, *info[:5], xyz, info[5]))
+        out.append("ENDMDL\n")
+    out.append("END\n")
+    return "".join(out)
+
+
+def minimise_in_pocket(lig_mol: Chem.Mol, receptor_pdb_text: str, cutoff: float = 8.0, restrain_cut: float = 6.0,
+                       max_frames: int = 16, its_per_frame: int = 40):
+    """Restrained minimisation of the ligand inside its binding pocket (MMFF94s, UFF fallback).
+
+    Whole residues with any heavy atom within `cutoff` Å of the ligand are kept. Backbone atoms and
+    pocket heavy atoms further than `restrain_cut` Å from the ligand are fixed; other side-chain
+    heavy atoms get a flat-bottom position restraint; the ligand and all hydrogens are free.
+    Hydrogens are added with coordinates because the source structures carry none.
+
+    Returns (summary, ligand_frames, pocket_frames, pocket_info, ligand_with_Hs).
+    """
+    lig = Chem.RemoveHs(lig_mol)
+    prot = Chem.MolFromPDBBlock(receptor_pdb_text, removeHs=False, sanitize=True, proximityBonding=True)
+    if prot is None:
+        return {"ok": False, "error": "protein PDB block could not be parsed"}, None, None, None, None
+    lig_xyz = lig.GetConformer().GetPositions()
+    pxyz = prot.GetConformer().GetPositions()
+    d = np.min(np.linalg.norm(pxyz[:, None, :] - lig_xyz[None, :, :], axis=2), axis=1)
+    keep_res = set()
+    for a in prot.GetAtoms():
+        if d[a.GetIdx()] <= cutoff:
+            ri = a.GetPDBResidueInfo()
+            keep_res.add((ri.GetChainId(), ri.GetResidueNumber(), ri.GetInsertionCode()))
+    keep = [a.GetIdx() for a in prot.GetAtoms()
+            if (a.GetPDBResidueInfo().GetChainId(), a.GetPDBResidueInfo().GetResidueNumber(), a.GetPDBResidueInfo().GetInsertionCode()) in keep_res]
+    if len(keep) < 10:
+        return {"ok": False, "error": "no pocket residues within cutoff"}, None, None, None, None
+    em = Chem.RWMol(prot)
+    for idx in sorted(set(range(prot.GetNumAtoms())) - set(keep), reverse=True):
+        em.RemoveAtom(idx)
+    pocket = em.GetMol()
+    d_keep = d[keep]
+    pocket.UpdatePropertyCache(strict=False)
+    Chem.SanitizeMol(pocket)
+    res_labels = []
+    seen = set()
+    for a in pocket.GetAtoms():
+        ri = a.GetPDBResidueInfo()
+        key = (ri.GetChainId(), ri.GetResidueNumber(), ri.GetInsertionCode())
+        if key not in seen:
+            seen.add(key)
+            res_labels.append(f"{ri.GetChainId()}:{ri.GetResidueName().strip()}{ri.GetResidueNumber()}")
+    pocketH = Chem.AddHs(pocket, addCoords=True)
+    ligH = Chem.AddHs(lig, addCoords=True)
+    complex_ = Chem.CombineMols(pocketH, ligH)
+    Chem.SanitizeMol(complex_)
+    n_p = pocketH.GetNumAtoms()
+    heavy_p = [a.GetIdx() for a in pocketH.GetAtoms() if a.GetAtomicNum() > 1]
+    heavy_l = [a.GetIdx() for a in ligH.GetAtoms() if a.GetAtomicNum() > 1]
+    pk_elems = [pocketH.GetAtomWithIdx(i).GetSymbol() for i in heavy_p]
+    lg_elems = [ligH.GetAtomWithIdx(i).GetSymbol() for i in heavy_l]
+    pocket_info = []
+    for i in heavy_p:
+        ri = pocketH.GetAtomWithIdx(i).GetPDBResidueInfo()
+        pocket_info.append((ri.GetName().strip(), ri.GetResidueName().strip(), ri.GetChainId() or "A", ri.GetResidueNumber(),
+                            ri.GetInsertionCode() or " ", pocketH.GetAtomWithIdx(i).GetSymbol()))
+
+    # ---- force field factory (MMFF94s, distance-dependent dielectric 4; UFF fallback)
+    ff_kind = None
+    props = AllChem.MMFFGetMoleculeProperties(complex_, mmffVariant="MMFF94s")
+    if props is not None:
+        ff_kind = "MMFF94s"
+        if hasattr(AllChem, "MMFFDielectricModel"):
+            props.SetMMFFDielectricModel(AllChem.MMFFDielectricModel.MMFFDistDielectric)
+        props.SetMMFFDielectricConstant(4.0)
+
+        def make_ff(mol=complex_, p=props):
+            return AllChem.MMFFGetMoleculeForceField(mol, p, nonBondedThresh=9.0, ignoreInterfragInteractions=False)
+
+        def frag_energy(m):
+            pp = AllChem.MMFFGetMoleculeProperties(m, mmffVariant="MMFF94s")
+            if hasattr(AllChem, "MMFFDielectricModel"):
+                pp.SetMMFFDielectricModel(AllChem.MMFFDielectricModel.MMFFDistDielectric)
+            pp.SetMMFFDielectricConstant(4.0)
+            return AllChem.MMFFGetMoleculeForceField(m, pp, nonBondedThresh=9.0, ignoreInterfragInteractions=False).CalcEnergy()
+
+        def add_restraint(ff, i):
+            ff.MMFFAddPositionConstraint(i, 0.3, 5.0)
+    elif AllChem.UFFHasAllMoleculeParams(complex_):
+        ff_kind = "UFF"
+
+        def make_ff(mol=complex_):
+            return AllChem.UFFGetMoleculeForceField(mol, vdwThresh=9.0, ignoreInterfragInteractions=False)
+
+        def frag_energy(m):
+            return AllChem.UFFGetMoleculeForceField(m, vdwThresh=9.0, ignoreInterfragInteractions=False).CalcEnergy()
+
+        def add_restraint(ff, i):
+            ff.UFFAddPositionConstraint(i, 0.3, 5.0)
+    else:
+        return {"ok": False, "error": "neither MMFF94s nor UFF could type the pocket–ligand complex",
+                "n_pocket_residues": len(res_labels), "n_pocket_atoms": len(heavy_p), "pocket_residues": res_labels}, None, None, None, None
+
+    def set_positions(pos):
+        conf = complex_.GetConformer()
+        for i, p in enumerate(pos):
+            conf.SetAtomPosition(i, p.tolist())
+
+    def frag_energies(pos):
+        pH, lH = Chem.Mol(pocketH), Chem.Mol(ligH)
+        cp, cl = pH.GetConformer(), lH.GetConformer()
+        for i in range(n_p):
+            cp.SetAtomPosition(i, pos[i].tolist())
+        for i in range(ligH.GetNumAtoms()):
+            cl.SetAtomPosition(i, pos[n_p + i].tolist())
+        return frag_energy(pH), frag_energy(lH)
+
+    try:
+        # ---- stage 0: hydrogen-only relaxation (all heavy atoms fixed)
+        ff = make_ff()
+        for i in heavy_p:
+            ff.AddFixedPoint(i)
+        for i in heavy_l:
+            ff.AddFixedPoint(n_p + i)
+        ff.Initialize()
+        ff.Minimize(maxIts=200)
+        pos0 = np.array(ff.Positions()).reshape(-1, 3)
+        set_positions(pos0)
+        plain = make_ff()  # unrestrained, for reporting energies
+        plain.Initialize()
+        e_pose = float(plain.CalcEnergy())
+        ep, el = frag_energies(pos0)
+        e_int_pose = e_pose - ep - el
+
+        # ---- stage 1: restrained pocket + free ligand minimisation with trajectory
+        ff = make_ff()
+        n_fixed = n_restr = 0
+        movable_res = set()
+        for k, i in enumerate(heavy_p):
+            name = pocket_info[k][0]
+            if name in ("N", "CA", "C", "O") or d_keep[i] > restrain_cut:
+                ff.AddFixedPoint(i); n_fixed += 1
+            else:
+                add_restraint(ff, i); n_restr += 1
+                movable_res.add(pocket_info[k][1:5])
+        ff.Initialize()
+        lig_frames = [pos0[n_p:][heavy_l].copy()]
+        pk_frames = [pos0[heavy_p].copy()]
+        energies = [e_pose]
+        converged = False
+        for _ in range(max_frames - 1):
+            rc = ff.Minimize(maxIts=its_per_frame)
+            pos = np.array(ff.Positions()).reshape(-1, 3)
+            lig_frames.append(pos[n_p:][heavy_l].copy()); pk_frames.append(pos[heavy_p].copy())
+            energies.append(float(plain.CalcEnergy(pos.ravel().tolist())))
+            if rc == 0:
+                converged = True
+                break
+        if not converged:
+            rc = ff.Minimize(maxIts=1000)
+            converged = rc == 0
+            pos = np.array(ff.Positions()).reshape(-1, 3)
+            lig_frames.append(pos[n_p:][heavy_l].copy()); pk_frames.append(pos[heavy_p].copy())
+            energies.append(float(plain.CalcEnergy(pos.ravel().tolist())))
+        pos1 = np.array(ff.Positions()).reshape(-1, 3)
+        e_min = float(plain.CalcEnergy(pos1.ravel().tolist()))
+        ep1, el1 = frag_energies(pos1)
+        e_int_min = e_min - ep1 - el1
+    except Exception as e:  # noqa
+        return {"ok": False, "error": f"{ff_kind}: {type(e).__name__}: {e}", "n_pocket_residues": len(res_labels),
+                "n_pocket_atoms": len(heavy_p), "pocket_residues": res_labels}, None, None, None, None
+
+    # trim the pocket trajectory to residues that have at least one movable atom (the rest is static)
+    keep_idx = [k for k, info in enumerate(pocket_info) if info[1:5] in movable_res]
+    pocket_info = [pocket_info[k] for k in keep_idx]
+    pk_frames_out = [f[keep_idx] for f in pk_frames]
+
+    lig0, lig1 = lig_frames[0], lig_frames[-1]
+    disp = np.linalg.norm(lig1 - lig0, axis=1)
+    pk_disp = np.linalg.norm(pk_frames[-1] - pk_frames[0], axis=1)
+    summary = {
+        "ok": True, "force_field": ff_kind,
+        "n_pocket_residues": len(res_labels), "n_pocket_atoms": len(heavy_p), "pocket_residues": res_labels,
+        "n_fixed": n_fixed, "n_restrained": n_restr,
+        "e_complex_pose": round(e_pose, 2), "e_complex_min": round(e_min, 2),
+        "e_interaction_pose": round(e_int_pose, 2), "e_interaction_min": round(e_int_min, 2),
+        "ligand_rmsd_drift": round(float(np.sqrt(np.mean(disp ** 2))), 3),
+        "ligand_atom_displacement": [round(float(x), 3) for x in disp],
+        "pocket_heavy_rmsd": round(float(np.sqrt(np.mean(pk_disp ** 2))), 3),
+        "max_pocket_atom_displacement": round(float(pk_disp.max()), 3),
+        "clashes_pose": _count_clashes(lig0, lg_elems, pk_frames[0], pk_elems),
+        "clashes_min": _count_clashes(lig1, lg_elems, pk_frames[-1], pk_elems),
+        "n_frames": len(lig_frames), "energies": [round(e, 2) for e in energies],
+        "frame_ligand_rmsd": [round(float(np.sqrt(np.mean(np.sum((f - lig0) ** 2, axis=1)))), 3) for f in lig_frames],
+        "converged": bool(converged),
+    }
+    return summary, lig_frames, pk_frames_out, pocket_info, ligH

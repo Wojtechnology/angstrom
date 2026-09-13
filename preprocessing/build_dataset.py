@@ -168,11 +168,14 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
         gz_write(sdir / "gt_traj.sdf.gz", st.frames_to_sdf(mh, frames, gt_min["energies"]))
     except Exception as e:  # noqa
         gt_min = None
+    gt_pocket = _pocket_minimisation(Chem.RemoveHs(gt_mol), gt_rec.to_pdb(), sdir, "gt")
     gt_prot_atoms = list(gt_rec.heavy_atoms())
     pocket = sorted({f"{ch}:{resn}{resi}" for el, xyz, ch, resn, resi, an in gt_prot_atoms
                      if np.min(np.linalg.norm(gt_xyz - xyz, axis=1)) <= st.CONTACT_CUTOFF})
 
-    detail = {**meta, "gt": {"minimisation": gt_min, "files": {"receptor": "gt_receptor.pdb", "ligand": "gt_ligand.sdf", "traj": "gt_traj.sdf"},
+    detail = {**meta, "gt": {"minimisation": gt_min, "pocket_minimisation": gt_pocket,
+                            "files": {"receptor": "gt_receptor.pdb", "ligand": "gt_ligand.sdf", "traj": "gt_traj.sdf",
+                                      "pocket_traj": "gt_pocket_traj.sdf", "pocket_traj_pdb": "gt_pocket_traj.pdb"},
                             "pocket_residues": pocket},
               "methods": {k: v for k, v in existing.items() if k not in {m["id"] for m in method_list}}}
 
@@ -186,7 +189,7 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
         row = method_rows.get(mid)
         res = {"ok": False}
         prev = existing.get(mid)
-        if prev and prev.get("ok") and (sdir / f"{mid}_ligand.sdf.gz").exists():
+        if prev and prev.get("ok") and "pocket_minimisation" in prev and (sdir / f"{mid}_ligand.sdf.gz").exists():
             detail["methods"][mid] = prev
             continue
         try:
@@ -223,6 +226,7 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
             gz_write(sdir / f"{mid}_ligand.sdf.gz", st.mol_to_sdf(Chem.RemoveHs(lig), f"{mid} prediction"))
             if minim is not None:
                 gz_write(sdir / f"{mid}_traj.sdf.gz", st.frames_to_sdf(mh, frames, minim["energies"]))
+            pocket_min = _pocket_minimisation(lig, pdb_text, sdir, mid)
             res = {
                 "ok": True, "seed": str(seed), "sample": str(sample),
                 "ranking_score": _f(row.get("ranking_score")),
@@ -230,7 +234,9 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
                 "lddt_lp": _f(row.get("lddt_lp")), "bb_rmsd": _f(row.get("bb_rmsd")),
                 "superposition": {k: (round(v, 3) if isinstance(v, float) else v) for k, v in sup.items() if k not in ("R", "t")},
                 "posebusters": pb_res, "pb_pass": pb_pass, "diagnostics": diag, "minimisation": minim,
-                "files": {"receptor": f"{mid}_receptor.pdb", "ligand": f"{mid}_ligand.sdf", "traj": f"{mid}_traj.sdf"},
+                "pocket_minimisation": pocket_min,
+                "files": {"receptor": f"{mid}_receptor.pdb", "ligand": f"{mid}_ligand.sdf", "traj": f"{mid}_traj.sdf",
+                          "pocket_traj": f"{mid}_pocket_traj.sdf", "pocket_traj_pdb": f"{mid}_pocket_traj.pdb"},
                 "model_file": str(path.relative_to(PRED_ROOT)),
             }
         except Exception as e:  # noqa
@@ -241,6 +247,18 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
     (OUT / "systems" / f"{system_id}.json").write_text(json.dumps(detail, separators=(",", ":")))
     detail["_elapsed"] = round(time.time() - t0, 1)
     return detail
+
+
+def _pocket_minimisation(lig, receptor_pdb_text, sdir, prefix):
+    """Ligand + pocket restrained minimisation; writes the two trajectory files and returns the summary."""
+    try:
+        summ, lig_frames, pk_frames, pocket_info, ligH = st.minimise_in_pocket(lig, receptor_pdb_text)
+    except Exception as e:  # noqa
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    if summ.get("ok"):
+        gz_write(sdir / f"{prefix}_pocket_traj.sdf.gz", st.frames_to_sdf(ligH, lig_frames, summ["energies"]))
+        gz_write(sdir / f"{prefix}_pocket_traj.pdb.gz", st.pocket_frames_to_pdb(pocket_info, pk_frames))
+    return summ
 
 
 def _f(x):
@@ -316,12 +334,15 @@ def main():
                 results.append({"system_id": sid, "method": mid, "ok": False, "error": r.get("error")})
                 continue
             mn = r.get("minimisation") or {}
+            pm = r.get("pocket_minimisation") or {}
             results.append({
                 "system_id": sid, "method": mid, "ok": True, "seed": r["seed"], "sample": r["sample"],
                 "ranking_score": r["ranking_score"], "rmsd": r["rmsd"], "rmsd_ref": r["rmsd_ref"], "lddt_pli": r["lddt_pli"],
                 "pb_pass": r["pb_pass"], "pb_fail_count": sum(1 for v in r["posebusters"].values() if v is False),
                 "strain_local": mn.get("strain_local"), "strain_global": mn.get("strain_global"), "rmsd_drift": mn.get("rmsd_drift"),
                 "protein_clashes": r["diagnostics"]["summary"]["protein_clashes"], "flagged_atoms": len(r["diagnostics"]["flagged_atoms"]),
+                "e_interaction_pose": pm.get("e_interaction_pose"), "e_interaction_min": pm.get("e_interaction_min"),
+                "pocket_ligand_drift": pm.get("ligand_rmsd_drift"), "clashes_pose": pm.get("clashes_pose"), "clashes_min": pm.get("clashes_min"),
             })
     index = {
         "generated": time.strftime("%Y-%m-%d %H:%M"),

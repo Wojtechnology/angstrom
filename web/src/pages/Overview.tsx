@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { ArrowUpRight, ExternalLink } from 'lucide-react'
-import type { Data } from 'plotly.js-basic-dist-min'
+import type { Data, PlotMouseEvent } from 'plotly.js-basic-dist-min'
 import { fetchIndex, rcsbUrl, type IndexData, type SystemSummary } from '../lib/api'
 import { bucketLabel, bucketOf, filterSystems, fmt, methodStats, pct, resultFor, RMSD_SUCCESS, similarityAt } from '../lib/stats'
 import { ErrorBox, Label, Select, Slider, Spinner, Stat, Tip } from '../components/ui'
@@ -15,6 +15,7 @@ export default function Overview() {
   const [threshold, setThreshold] = useState(100)
   const [cutoff, setCutoff] = useState<string>('')
   const [sort, setSort] = useState<SortKey>('similarity')
+  const navigate = useNavigate()
 
   useEffect(() => {
     fetchIndex().then((d) => { setData(d); setCutoff(d.default_cutoff) }).catch(setError)
@@ -39,18 +40,28 @@ export default function Overview() {
     })
   }, [data, cutoff])
 
-  const cutoffPlot = useMemo<Data[]>(() => {
-    if (!data) return []
+  const scatterPlot = useMemo<Data[]>(() => {
+    if (!data || !cutoff) return []
     return data.methods.map((m) => {
-      const ys = data.cutoffs.map((c) => methodStats(data, filterSystems(data, c, threshold), m.id).successRate)
-      const ns = data.cutoffs.map((c) => filterSystems(data, c, threshold).length)
+      const pts = systems
+        .map((s) => ({ s, r: resultFor(data, s.system_id, m.id) }))
+        .filter((x): x is { s: SystemSummary; r: NonNullable<ReturnType<typeof resultFor>> } => !!x.r && x.r.ok && x.r.rmsd != null)
+      const flagged = pts.map(({ r }) => (r.clashes_pose ?? 0) > 0 || r.pb_pass === false)
       return {
-        type: 'scatter', mode: 'lines+markers', name: m.name, x: data.cutoffs, y: ys.map((y) => (y == null ? null : y * 100)),
-        line: { color: m.color, width: 2 }, marker: { size: 6 },
-        hovertemplate: `${m.name}<br>cutoff %{x}: %{y:.0f}% ≤ ${RMSD_SUCCESS} Å<br>n=%{customdata}<extra></extra>`, customdata: ns,
+        type: 'scatter', mode: 'markers', name: m.name,
+        x: pts.map(({ s }) => similarityAt(s, cutoff)),
+        y: pts.map(({ r }) => r.rmsd as number),
+        customdata: pts.map(({ s }) => [s.system_id, m.id, s.pdb_id.toUpperCase()]),
+        marker: { size: 7, color: m.color, line: { width: flagged.map((f) => (f ? 1.5 : 1)), color: flagged.map((f) => (f ? '#d64545' : '#ffffff')) } },
+        hovertemplate: `%{customdata[2]} · ${m.name} · %{y:.2f} Å · similarity %{x:.0f}<extra></extra>`,
       } as Data
     })
-  }, [data, threshold])
+  }, [data, cutoff, systems])
+
+  const onPointClick = useCallback((e: PlotMouseEvent) => {
+    const cd = e.points?.[0]?.customdata as unknown as [string, string, string] | undefined
+    if (cd) navigate(`/system/${cd[0]}?m=${cd[1]}`)
+  }, [navigate])
 
   const rows = useMemo(() => {
     if (!data || !cutoff) return []
@@ -114,14 +125,24 @@ export default function Overview() {
             <h2 className="font-medium">Success rate by similarity bucket</h2>
             <span className="text-[11px] text-fg-3">cutoff {cutoff} · all systems</span>
           </div>
-          <Plot data={bucketPlot} layout={{ barmode: 'group', yaxis: { title: { text: `% RMSD ≤ ${RMSD_SUCCESS} Å` }, range: [0, 100] }, xaxis: { title: { text: 'SuCOS-pocket similarity to closest training structure' } } }} />
+          <Plot data={bucketPlot} layout={{ barmode: 'group', margin: { l: 44, r: 12, t: 8, b: 44 }, legend: { orientation: 'h', y: -0.38, x: 0 }, yaxis: { title: { text: `% RMSD ≤ ${RMSD_SUCCESS} Å` }, range: [0, 100] }, xaxis: { title: { text: 'SuCOS-pocket similarity to closest training structure', standoff: 6 } } }} />
         </div>
         <div className="card p-4">
           <div className="flex items-baseline justify-between mb-1">
-            <h2 className="font-medium">Success rate vs. assumed training cutoff</h2>
-            <span className="text-[11px] text-fg-3">systems with similarity ≤ {threshold} under each cutoff</span>
+            <h2 className="font-medium">Ligand RMSD vs. similarity to training set</h2>
+            <span className="text-[11px] text-fg-3">cutoff {cutoff} · similarity ≤ {threshold} · click a point to open it</span>
           </div>
-          <Plot data={cutoffPlot} layout={{ yaxis: { title: { text: `% RMSD ≤ ${RMSD_SUCCESS} Å` }, range: [0, 100] }, xaxis: { type: 'category', tickvals: data.cutoffs, ticktext: data.cutoffs.map(shortDate), tickfont: { size: 10 } } }} />
+          <Plot
+            data={scatterPlot}
+            onClick={onPointClick}
+            layout={{
+              margin: { l: 44, r: 12, t: 8, b: 44 }, legend: { orientation: 'h', y: -0.38, x: 0 }, hovermode: 'closest',
+              xaxis: { title: { text: 'SuCOS-pocket similarity at this cutoff', standoff: 6 }, range: [-3, 103] },
+              yaxis: { title: { text: 'ligand RMSD (Å)' }, type: 'log', range: [Math.log10(0.2), Math.log10(50)], tickvals: [0.2, 0.5, 1, 2, 5, 10, 20, 50], ticktext: ['0.2', '0.5', '1', '2', '5', '10', '20', '50'] },
+              shapes: [{ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: RMSD_SUCCESS, y1: RMSD_SUCCESS, line: { color: '#8a8a95', width: 1, dash: 'dash' } }],
+              annotations: [{ xref: 'paper', x: 1, y: Math.log10(RMSD_SUCCESS), xanchor: 'right', yanchor: 'bottom', text: `${RMSD_SUCCESS} Å`, showarrow: false, font: { size: 10, color: '#8a8a95' } }],
+            }}
+          />
         </div>
       </div>
 
@@ -201,10 +222,4 @@ export function RmsdCell({ rmsd, pb, clashes }: { rmsd: number | null | undefine
       {!!clashes && clashes > 0 && <span className="w-1.5 h-1.5 rounded-full bg-bad" />}
     </span>
   )
-}
-
-function shortDate(iso: string): string {
-  const [y, m] = iso.split('-')
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  return `${months[Number(m) - 1]} ${y}`
 }
