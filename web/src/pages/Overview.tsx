@@ -68,7 +68,7 @@ export default function Overview() {
         x: pts.map(({ s }) => similarityAt(s, cutoff, axis)),
         y: idx.map((i) => clamped.ys[i]),
         customdata: pts.map(({ s }, k) => [s.system_id, m.id, s.pdb_id.toUpperCase(), all[idx[k]].y]),
-        marker: { size: 7, color: m.color, line: { width: pts.map((p) => (p.flagged ? 1.5 : 1)), color: pts.map((p) => (p.flagged ? '#d64545' : '#ffffff')) } },
+        marker: { size: 7, color: m.color, symbol: idx.map((i) => (clamped.cap != null && all[i].y > clamped.cap ? 'triangle-up' : 'circle')), line: { width: pts.map((p) => (p.flagged ? 1.5 : 1)), color: pts.map((p) => (p.flagged ? '#d64545' : '#ffffff')) } },
         hovertemplate: `%{customdata[2]} · ${m.name} · %{customdata[3]:.2f} ${yDef.unit} · similarity %{x:.0f}<extra></extra>`,
       } as Data
     })
@@ -193,7 +193,7 @@ export default function Overview() {
           </div>
           <Plot data={scatter.traces} onClick={onPointClick} layout={scatterLayout} />
           {scatter.cap != null && (
-            <div className="text-[11px] text-fg-3 mt-1">{scatter.nClamped} extreme value{scatter.nClamped > 1 ? 's' : ''} clamped to {scatter.cap.toFixed(0)} {yDef.unit} for readability; hover shows the true value.</div>
+            <div className="text-[11px] text-fg-3 mt-1">{scatter.nClamped} extreme value{scatter.nClamped > 1 ? 's' : ''} clamped to {scatter.cap.toFixed(0)} {yDef.unit} (shown as ▲); hover shows the true value.</div>
           )}
         </div>
       </div>

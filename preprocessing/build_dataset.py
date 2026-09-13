@@ -198,23 +198,32 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
     gt_rec = st.Receptor.from_file(gt_dir / "receptor.cif")
     gt_xyz = Chem.RemoveHs(gt_mol).GetConformer().GetPositions()
     sdir = OUT / "structures" / system_id
-    gz_write(sdir / "gt_receptor.pdb.gz", gt_rec.to_pdb())
-    gz_write(sdir / "gt_ligand.sdf.gz", st.mol_to_sdf(Chem.RemoveHs(gt_mol), "ground truth"))
-    gt_min = None
-    try:
-        gt_min, frames, mh = st.minimise_with_trajectory(Chem.RemoveHs(gt_mol))
-        gz_write(sdir / "gt_traj.sdf.gz", st.frames_to_sdf(mh, frames, gt_min["energies"]))
-    except Exception as e:  # noqa
+    prev_gt = {}
+    if reuse and prev_path.exists():
+        try:
+            prev_gt = json.loads(prev_path.read_text()).get("gt", {})
+        except Exception:  # noqa
+            prev_gt = {}
+    gt_files = {"receptor": "gt_receptor.pdb", "ligand": "gt_ligand.sdf", "traj": "gt_traj.sdf",
+                "pocket_traj": "gt_pocket_traj.sdf", "pocket_traj_pdb": "gt_pocket_traj.pdb"}
+    if prev_gt.get("pocket_minimisation", {}).get("ok") and (sdir / "gt_pocket_traj.pdb.gz").exists():
+        gt_block = prev_gt  # ground-truth analysis is deterministic; reuse it
+    else:
+        gz_write(sdir / "gt_receptor.pdb.gz", gt_rec.to_pdb())
+        gz_write(sdir / "gt_ligand.sdf.gz", st.mol_to_sdf(Chem.RemoveHs(gt_mol), "ground truth"))
         gt_min = None
-    gt_pocket = _pocket_minimisation(Chem.RemoveHs(gt_mol), gt_rec.to_pdb(), sdir, "gt")
-    gt_prot_atoms = list(gt_rec.heavy_atoms())
-    pocket = sorted({f"{ch}:{resn}{resi}" for el, xyz, ch, resn, resi, an in gt_prot_atoms
-                     if np.min(np.linalg.norm(gt_xyz - xyz, axis=1)) <= st.CONTACT_CUTOFF})
+        try:
+            gt_min, frames, mh = st.minimise_with_trajectory(Chem.RemoveHs(gt_mol))
+            gz_write(sdir / "gt_traj.sdf.gz", st.frames_to_sdf(mh, frames, gt_min["energies"]))
+        except Exception:  # noqa
+            gt_min = None
+        gt_pocket = _pocket_minimisation(Chem.RemoveHs(gt_mol), gt_rec.to_pdb(), sdir, "gt")
+        gt_prot_atoms = list(gt_rec.heavy_atoms())
+        pocket = sorted({f"{ch}:{resn}{resi}" for el, xyz, ch, resn, resi, an in gt_prot_atoms
+                         if np.min(np.linalg.norm(gt_xyz - xyz, axis=1)) <= st.CONTACT_CUTOFF})
+        gt_block = {"minimisation": gt_min, "pocket_minimisation": gt_pocket, "files": gt_files, "pocket_residues": pocket}
 
-    detail = {**meta, "gt": {"minimisation": gt_min, "pocket_minimisation": gt_pocket,
-                            "files": {"receptor": "gt_receptor.pdb", "ligand": "gt_ligand.sdf", "traj": "gt_traj.sdf",
-                                      "pocket_traj": "gt_pocket_traj.sdf", "pocket_traj_pdb": "gt_pocket_traj.pdb"},
-                            "pocket_residues": pocket},
+    detail = {**meta, "gt": gt_block,
               "methods": {k: v for k, v in existing.items() if k not in {m["id"] for m in method_list}}}
 
     from posebusters import PoseBusters

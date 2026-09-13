@@ -132,15 +132,15 @@ export function scatterYDef(key: ScatterY): ScatterYDef {
   return SCATTER_Y.find((y) => y.value === key) ?? SCATTER_Y[0]
 }
 
-/** Clamp extreme outliers for linear energy axes: values beyond the 98th percentile * 1.5 are pinned to the cap. */
+/** Clamp extreme outliers for linear energy axes (robust IQR fence) so a few huge clashes don't squash the axis. */
 export function clampOutliers(ys: number[], enable: boolean): { ys: number[]; cap: number | null; nClamped: number } {
   if (!enable || ys.length < 8) return { ys, cap: null, nClamped: 0 }
   const s = [...ys].sort((a, b) => a - b)
-  const p98 = s[Math.min(s.length - 1, Math.floor(s.length * 0.98))]
-  const cap = Math.max(p98 * 1.5, p98 + 10)
-  const out = ys.map((y) => Math.min(y, cap))
+  const q = (f: number) => s[Math.min(s.length - 1, Math.floor(s.length * f))]
+  const iqr = q(0.75) - q(0.25)
+  const cap = Math.max(q(0.75) + 3 * iqr, q(0.9) * 1.5, 25)
   const n = ys.filter((y) => y > cap).length
-  return n ? { ys: out, cap, nClamped: n } : { ys, cap: null, nClamped: 0 }
+  return n ? { ys: ys.map((y) => Math.min(y, cap)), cap, nClamped: n } : { ys, cap: null, nClamped: 0 }
 }
 
 // ---------------------------------------------------------------- misc
