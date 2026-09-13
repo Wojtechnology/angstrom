@@ -349,7 +349,7 @@ function excessFor(index: IndexData | null, systemId: string, method: string, ke
 
 function ExcessChip({ value, label }: { value: number | null; label: string }) {
   if (value == null) return null
-  const cls = value <= 5 ? 'chip-ok' : value <= 25 ? 'chip-warn' : 'chip-bad'
+  const cls = value <= 5 ? 'chip-muted' : value <= 25 ? 'chip-warn' : 'chip-bad'  // small excess is neutral, never 'good'
   return <span className={`chip ${cls} self-start`} title="prediction − crystal pose, same force field">{label} {value >= 0 ? '+' : ''}{value.toFixed(1)} kcal/mol</span>
 }
 
