@@ -64,6 +64,10 @@ export interface ResultRow {
   pocket_ligand_drift?: number | null
   clashes_pose?: number | null
   clashes_min?: number | null
+  contact_retention?: number | null
+  shape_overlap?: number | null
+  centroid_distance?: number | null
+  pocket_hit?: boolean | null
   error?: string
 }
 
@@ -127,6 +131,21 @@ export interface PocketMinimisation {
   converged: boolean
 }
 
+export type ContactType = 'any' | 'hbond' | 'hydrophobic' | 'ionic'
+export interface ContactEntry { ligand_atom: number; residue: string; type: string }
+export interface Contacts {
+  cutoff: number
+  gt_total: number
+  kept: number
+  retention: number | null
+  by_type: Record<ContactType, { gt: number; kept: number }>
+  residues: { residue: string; gt: boolean; pred: boolean }[]
+  lost: ContactEntry[]
+  new: ContactEntry[]
+}
+export interface PocketHit { shape_overlap: number; centroid_distance: number; hit: boolean }
+export interface GtContacts { cutoff: number; total: number; by_type: Record<string, number>; residues: string[] }
+
 export interface StructureFiles { receptor: string; ligand: string; traj: string; pocket_traj?: string; pocket_traj_pdb?: string }
 
 export interface MethodDetail {
@@ -146,11 +165,13 @@ export interface MethodDetail {
   diagnostics?: Diagnostics
   minimisation?: Minimisation
   pocket_minimisation?: PocketMinimisation | null
+  contacts?: Contacts | null
+  pocket_hit?: PocketHit | null
   files?: StructureFiles
 }
 
 export interface SystemDetail extends SystemSummary {
-  gt: { minimisation: Minimisation | null; pocket_minimisation?: PocketMinimisation | null; files: StructureFiles; pocket_residues: string[] }
+  gt: { minimisation: Minimisation | null; pocket_minimisation?: PocketMinimisation | null; contacts?: GtContacts | null; files: StructureFiles; pocket_residues: string[] }
   methods: Record<string, MethodDetail>
 }
 

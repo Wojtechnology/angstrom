@@ -11,7 +11,7 @@ export function similarityAt(sys: SystemSummary): number {
 export const SIMILARITY_AXIS_TITLE = 'SuCOS-pocket similarity to closest training structure'
 
 // ---------------------------------------------------------------- aggregate metrics
-export type MetricKey = 'success' | 'pb_valid' | 'clash_free' | 'relax_de' | 'strain_local'
+export type MetricKey = 'success' | 'pb_valid' | 'clash_free' | 'pocket_hit' | 'contact_retention' | 'relax_de' | 'strain_local'
 
 export interface MetricDef {
   value: MetricKey
@@ -31,6 +31,8 @@ export const METRICS: MetricDef[] = [
   { value: 'success', label: `RMSD ≤ ${RMSD_SUCCESS} Å (success rate)`, short: `% RMSD ≤ ${RMSD_SUCCESS} Å`, kind: 'rate', unit: '%', description: `Fraction of systems whose top-ranked pose has ligand RMSD ≤ ${RMSD_SUCCESS} Å.`, of: (r) => r.rmsd ?? null, ok: (r) => r.rmsd != null && r.rmsd <= RMSD_SUCCESS },
   { value: 'pb_valid', label: 'PoseBusters valid (rate)', short: '% PoseBusters valid', kind: 'rate', unit: '%', description: 'Fraction of poses passing every PoseBusters redock check.', of: (r) => (r.pb_pass == null ? null : r.pb_pass ? 1 : 0), ok: (r) => r.pb_pass === true },
   { value: 'clash_free', label: 'Clash-free at pose (rate)', short: '% clash-free at pose', kind: 'rate', unit: '%', description: 'Fraction of poses with no ligand–protein heavy-atom clash before relaxation.', of: (r) => (r.clashes_pose == null ? null : r.clashes_pose === 0 ? 1 : 0), ok: (r) => r.clashes_pose === 0 },
+  { value: 'pocket_hit', label: 'Pocket hit rate', short: '% in the crystal pocket', kind: 'rate', unit: '%', description: 'Fraction of poses that land in the crystal binding site, judged by shape overlap with the crystal ligand (≥ 0.05) or centroid distance ≤ 4 Å.', of: (r) => (r.pocket_hit == null ? null : r.pocket_hit ? 1 : 0), ok: (r) => r.pocket_hit === true },
+  { value: 'contact_retention', label: 'Median contact retention', short: 'median contact retention', kind: 'median', unit: '', description: "Median fraction of the crystal ligand's protein contacts (heavy-atom pairs ≤ 4 Å, per ligand atom and residue) that the predicted pose keeps.", of: (r) => r.contact_retention ?? null },
   { value: 'relax_de', label: 'Median relaxation ΔE, pose − min (lower is better)', short: 'median relaxation ΔE (kcal/mol, lower is better)', kind: 'median', unit: 'kcal/mol', description: 'Median of the energy released (MMFF94s, kcal/mol) when the ligand and pocket side chains are minimised with the backbone fixed; large values mean the pose was strained or clashing.', of: (r) => (r.e_interaction_pose != null && r.e_interaction_min != null ? r.e_interaction_pose - r.e_interaction_min : null) },
   { value: 'strain_local', label: 'Median ligand strain, local (kcal/mol, lower is better)', short: 'median local strain (kcal/mol, lower is better)', kind: 'median', unit: 'kcal/mol', description: "Median of the energy released (MMFF94s, kcal/mol) when the ligand alone is minimised from the predicted pose to the nearest local minimum; the crystal ligand's own strain is the baseline.", of: (r) => r.strain_local ?? null },
 ]
@@ -79,11 +81,12 @@ export function methodStats(data: IndexData, systems: SystemSummary[], method: s
 
 export function formatMetric(def: MetricDef, v: number | null): string {
   if (v == null) return '–'
-  return def.kind === 'rate' ? `${Math.round(v * 100)}%` : `${v.toFixed(1)}`
+  if (def.kind === 'rate') return `${Math.round(v * 100)}%`
+  return def.unit === '' ? v.toFixed(2) : v.toFixed(1)
 }
 
 // ---------------------------------------------------------------- scatter y axes
-export type ScatterY = 'rmsd' | 'relax_de' | 'strain_local' | 'clashes_pose' | 'pb_fails'
+export type ScatterY = 'rmsd' | 'contact_retention' | 'shape_overlap' | 'relax_de' | 'strain_local' | 'clashes_pose' | 'pb_fails'
 
 export interface ScatterYDef {
   value: ScatterY
@@ -98,6 +101,8 @@ export interface ScatterYDef {
 
 export const SCATTER_Y: ScatterYDef[] = [
   { value: 'rmsd', label: 'Ligand RMSD (Å, log)', axisTitle: 'ligand RMSD (Å)', log: true, unit: 'Å', description: 'Symmetry-corrected heavy-atom RMSD between the predicted and crystal ligand after superposing the predicted receptor on the crystal binding-site Cα atoms; ≤ 2 Å counts as success.', of: (r) => r.rmsd ?? null },
+  { value: 'contact_retention', label: 'Contact retention', axisTitle: 'contact retention (fraction of crystal contacts kept)', log: false, unit: '', description: "Fraction of the crystal ligand's protein contacts (heavy-atom pairs ≤ 4 Å, per ligand atom and residue) that the predicted pose keeps; 1 means every crystal contact is reproduced.", of: (r) => r.contact_retention ?? null },
+  { value: 'shape_overlap', label: 'Shape overlap with crystal ligand', axisTitle: 'shape overlap with crystal ligand (0–1)', log: false, unit: '', description: 'Volume overlap between the predicted and crystal ligand poses (0–1); values near 0 mean the pose missed the binding site.', of: (r) => r.shape_overlap ?? null },
   { value: 'relax_de', label: 'Relaxation ΔE (pose − min)', axisTitle: 'relaxation ΔE (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', description: 'Energy released (MMFF94s, kcal/mol) when the ligand and pocket side chains are minimised with the backbone fixed; large values mean the pose was strained or clashing.', of: (r) => (r.e_interaction_pose != null && r.e_interaction_min != null ? r.e_interaction_pose - r.e_interaction_min : null) },
   { value: 'strain_local', label: 'Ligand strain, local', axisTitle: 'local ligand strain (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', description: "Energy released (MMFF94s, kcal/mol) when the ligand alone is minimised from the predicted pose to the nearest local minimum; the crystal ligand's own strain is the baseline.", of: (r) => r.strain_local ?? null },
   { value: 'clashes_pose', label: 'Pocket clashes at pose', axisTitle: 'pocket clashes at pose', log: false, unit: '', description: 'Number of ligand–protein heavy-atom pairs closer than 0.75 × the sum of their van der Waals radii, before any relaxation.', of: (r) => r.clashes_pose ?? null },

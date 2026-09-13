@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, ExternalLink, Pause, Play, Focus, Check, X, Minus } from 'lucide-react'
 import type { Data } from 'plotly.js-basic-dist-min'
-import { fetchIndex, fetchStructure, fetchSystem, isDocking, PB_CHECK_LABELS, PB_VALIDITY_CHECKS, rcsbUrl, type IndexData, type MethodDetail, type PocketMinimisation, type SystemDetail } from '../lib/api'
+import { fetchIndex, fetchStructure, fetchSystem, isDocking, PB_CHECK_LABELS, PB_VALIDITY_CHECKS, rcsbUrl, type Contacts, type IndexData, type MethodDetail, type PocketMinimisation, type SystemDetail } from '../lib/api'
 import { fmt, RMSD_SUCCESS } from '../lib/stats'
 import { Checkbox, ErrorBox, Label, MethodBadge, Select, Spinner, Tip } from '../components/ui'
 import Viewer3D, { type ClashRef, type HoveredAtom, type ViewerHandle } from '../components/Viewer3D'
@@ -25,6 +25,8 @@ export default function SystemView() {
   const [hoveredAtom, setHoveredAtom] = useState<HoveredAtom | null>(null)
   const [hoveredClash, setHoveredClash] = useState<ClashRef | null>(null)   // viewer -> panel
   const [highlightClash, setHighlightClash] = useState<ClashRef | null>(null) // panel -> viewer
+  const [highlightResidue, setHighlightResidue] = useState<string | null>(null)
+  const [highlightGtAtoms, setHighlightGtAtoms] = useState<number[] | null>(null)
   const [showPocket, setShowPocket] = useState(true)
   const [showViolations, setShowViolations] = useState(true)
   const [trajectoryMode, setTrajectoryMode] = useState<TrajMode>('off')
@@ -81,7 +83,8 @@ export default function SystemView() {
   useEffect(() => { setFrame(0); setPlaying(false); setHighlight(null); setHoveredAtom(null) }, [method])
   const onAtomHover = useCallback((a: HoveredAtom | null) => setHoveredAtom(a), [])
   const onClashHover = useCallback((c: ClashRef | null) => setHoveredClash(c), [])
-  useEffect(() => { setHighlightClash(null); setHoveredClash(null) }, [method])
+  useEffect(() => { setHighlightClash(null); setHoveredClash(null); setHighlightResidue(null); setHighlightGtAtoms(null) }, [method])
+  const onContactHover = useCallback((residue: string | null, gtAtoms: number[] | null) => { setHighlightResidue(residue); setHighlightGtAtoms(gtAtoms) }, [])
   useEffect(() => { setFrame(0); setPlaying(trajectoryMode !== 'off') }, [trajectoryMode])
 
   const energyPlot = useMemo<Data[]>(() => {
@@ -181,6 +184,8 @@ export default function SystemView() {
                 atomDisplacement={trajectoryMode === 'pocket' ? pocket?.ligand_atom_displacement : detail?.minimisation?.atom_displacement}
                 highlightAtoms={highlight}
                 highlightClash={highlightClash}
+                highlightResidue={highlightResidue}
+                highlightGtAtoms={highlightGtAtoms}
                 onAtomHover={onAtomHover}
                 onClashHover={onClashHover}
               />
@@ -227,7 +232,7 @@ export default function SystemView() {
             </div>
           )}
         </div>
-        {detail?.ok && detail.diagnostics && <DiagnosticsPanel d={detail.diagnostics} onHover={setHighlight} onHoverClash={setHighlightClash} hoveredAtom={hoveredAtom?.index ?? null} hoveredClash={hoveredClash} />}
+        {detail?.ok && detail.diagnostics && <DiagnosticsPanel d={detail.diagnostics} contacts={detail.contacts ?? null} onHover={setHighlight} onHoverClash={setHighlightClash} onHoverContact={onContactHover} hoveredAtom={hoveredAtom?.index ?? null} hoveredClash={hoveredClash} />}
         </div>
 
         {/* side panel */}
@@ -237,12 +242,26 @@ export default function SystemView() {
           ) : (
             <>
               <div className="card px-4 py-3">
-                <Label>Accuracy</Label>
+                <div className="flex items-center justify-between">
+                  <Label>Accuracy</Label>
+                  {detail.pocket_hit && !detail.pocket_hit.hit && <span className="chip chip-bad" title={`shape overlap ${fmt(detail.pocket_hit.shape_overlap)} · centroid ${fmt(detail.pocket_hit.centroid_distance, 1)} Å from the crystal ligand`}>missed the pocket</span>}
+                </div>
                 <div className="grid grid-cols-3 gap-3 mt-2">
                   <Metric label="RMSD" value={`${fmt(detail.rmsd)} Å`} good={detail.rmsd! <= RMSD_SUCCESS} sub="pocket-aligned" />
                   <Metric label="lDDT-PLI" value={fmt(detail.lddt_pli)} sub="benchmark" />
                   <Metric label="pocket Cα" value={`${fmt(detail.superposition?.pocket_ca_rmsd)} Å`} sub={`${detail.superposition?.n_pocket_ca ?? 0} atoms`} />
+                  {detail.contacts && (
+                    <Metric label="contacts kept" value={`${detail.contacts.kept} / ${detail.contacts.gt_total}`} sub={detail.contacts.retention == null ? 'no crystal contacts' : `${Math.round(detail.contacts.retention * 100)}% of crystal contacts`} good={detail.contacts.retention == null ? undefined : detail.contacts.retention >= 0.5} />
+                  )}
+                  {detail.pocket_hit && (
+                    <Metric label="shape overlap" value={fmt(detail.pocket_hit.shape_overlap)} sub={`centroid ${fmt(detail.pocket_hit.centroid_distance, 1)} Å away`} good={detail.pocket_hit.hit ? undefined : false} />
+                  )}
                 </div>
+                {detail.contacts && (
+                  <div className="text-[11px] text-fg-3 mt-2">
+                    H-bonds {detail.contacts.by_type.hbond?.kept ?? 0}/{detail.contacts.by_type.hbond?.gt ?? 0} · hydrophobic {detail.contacts.by_type.hydrophobic?.kept ?? 0}/{detail.contacts.by_type.hydrophobic?.gt ?? 0} · ionic {detail.contacts.by_type.ionic?.kept ?? 0}/{detail.contacts.by_type.ionic?.gt ?? 0}
+                  </div>
+                )}
                 <div className="text-[11px] text-fg-3 mt-2">
                   seed {String(detail.seed)} · sample {String(detail.sample)} · ranking score {fmt(detail.ranking_score, 3)} · benchmark RMSD {fmt(detail.rmsd_ref)} Å
                 </div>
@@ -332,7 +351,7 @@ function PocketCard({ pocket, gt, plot, showPlot }: { pocket: PocketMinimisation
   )
 }
 
-function DiagnosticsPanel({ d, onHover, onHoverClash, hoveredAtom, hoveredClash }: { d: NonNullable<MethodDetail['diagnostics']>; onHover: (atoms: number[] | null) => void; onHoverClash: (c: ClashRef | null) => void; hoveredAtom: number | null; hoveredClash: ClashRef | null }) {
+function DiagnosticsPanel({ d, contacts, onHover, onHoverClash, onHoverContact, hoveredAtom, hoveredClash }: { d: NonNullable<MethodDetail['diagnostics']>; contacts: Contacts | null; onHover: (atoms: number[] | null) => void; onHoverClash: (c: ClashRef | null) => void; onHoverContact: (residue: string | null, gtAtoms: number[] | null) => void; hoveredAtom: number | null; hoveredClash: ClashRef | null }) {
   const s = d.summary
   const panel = useRef<HTMLDivElement>(null)
   // reverse hover: scroll the first sidebar entry containing the hovered viewer atom into view
@@ -384,11 +403,34 @@ function DiagnosticsPanel({ d, onHover, onHoverClash, hoveredAtom, hoveredClash 
           </div>
         ))}
       </div>
-      {d.contacts.length > 0 && (
+      {contacts && contacts.residues.length > 0 ? (
         <div className="mt-2 pt-2 border-t hairline">
-          <div className="text-[11px] text-fg-3 mb-1">Residues within 4.5 Å of the predicted ligand</div>
+          <div className="text-[11px] text-fg-3 mb-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span>Contact residues (≤ {contacts.cutoff} Å) · hover to show the side chain</span>
+            <span className="inline-flex items-center gap-1"><span className="chip chip-ok" style={{ height: 14, padding: '0 5px', fontSize: 10 }}>kept</span> in crystal and prediction</span>
+            <span className="inline-flex items-center gap-1"><span className="chip chip-muted line-through" style={{ height: 14, padding: '0 5px', fontSize: 10 }}>lost</span> crystal only</span>
+            <span className="inline-flex items-center gap-1"><span className="chip" style={{ height: 14, padding: '0 5px', fontSize: 10, border: '1px solid var(--color-line-2)', color: 'var(--color-fg-2)' }}>new</span> prediction only</span>
+          </div>
           <div className="flex flex-wrap gap-1">
-            {d.contacts.map((c) => <span key={c.residue} className="chip chip-muted mono" title={`${c.min_dist} Å`}>{c.residue}</span>)}
+            {contacts.residues.map((c) => {
+              const kind = c.gt && c.pred ? 'kept' : c.gt ? 'lost' : 'new'
+              const lostAtoms = kind === 'lost' ? contacts.lost.filter((l) => l.residue === c.residue).map((l) => l.ligand_atom) : null
+              const cls = kind === 'kept' ? 'chip chip-ok mono' : kind === 'lost' ? 'chip chip-muted mono line-through opacity-80' : 'chip mono'
+              const style = kind === 'new' ? { border: '1px solid var(--color-line-2)', color: 'var(--color-fg-2)' } : undefined
+              return (
+                <span key={c.residue} className={`${cls} cursor-default hover:ring-2 hover:ring-accent-2`} style={style} title={kind}
+                  onMouseEnter={() => onHoverContact(c.residue, lostAtoms)} onMouseLeave={() => onHoverContact(null, null)}>
+                  {c.residue}
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      ) : d.contacts.length > 0 && (
+        <div className="mt-2 pt-2 border-t hairline">
+          <div className="text-[11px] text-fg-3 mb-1">Residues within 4.5 Å of the predicted ligand · hover to show the side chain</div>
+          <div className="flex flex-wrap gap-1">
+            {d.contacts.map((c) => <span key={c.residue} className="chip chip-muted mono cursor-default" title={`${c.min_dist} Å`} onMouseEnter={() => onHoverContact(c.residue, null)} onMouseLeave={() => onHoverContact(null, null)}>{c.residue}</span>)}
           </div>
         </div>
       )}

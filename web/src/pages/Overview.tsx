@@ -78,7 +78,7 @@ export default function Overview() {
         all.push({ s, m: m.id, y, flagged: (r.clashes_pose ?? 0) > 0 || r.pb_pass === false })
       }
     }
-    const clamped = clampOutliers(all.map((p) => p.y), !yDef.log)
+    const clamped = clampOutliers(all.map((p) => p.y), !yDef.log && yDef.unit !== '')
     const traces = methods.map((m) => {
       const idx = all.map((p, i) => (p.m === m.id ? i : -1)).filter((i) => i >= 0)
       const pts = idx.map((i) => all[i])
@@ -108,9 +108,10 @@ export default function Overview() {
       }
     }
     const energy = yDef.unit === 'kcal/mol'
+    const fraction = yDef.value === 'contact_retention' || yDef.value === 'shape_overlap'
     return {
       ...base,
-      yaxis: { title: { text: yDef.axisTitle }, autorange: true, zeroline: energy, zerolinecolor: '#8a8a95', zerolinewidth: 1, ...(energy ? {} : { dtick: 1, rangemode: 'tozero' as const }) },
+      yaxis: { title: { text: yDef.axisTitle }, autorange: !fraction, ...(fraction ? { range: [-0.03, 1.03], dtick: 0.2 } : {}), zeroline: energy, zerolinecolor: '#8a8a95', zerolinewidth: 1, ...(energy || fraction ? {} : { dtick: 1, rangemode: 'tozero' as const }) },
       shapes: energy ? [{ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 0, y1: 0, line: { color: '#8a8a95', width: 1, dash: 'dash' } }] : [],
     }
   }, [yDef])
@@ -222,7 +223,7 @@ export default function Overview() {
       <div className="card overflow-hidden">
         <div className="px-4 py-3 border-b hairline flex items-center gap-3">
           <h2 className="font-medium">Systems</h2>
-          <span className="text-fg-3 text-[12px] hidden md:inline-flex items-center gap-1.5">ligand RMSD (Å) · <span className="w-1.5 h-1.5 rounded-full bg-warn inline-block" /> PoseBusters violation · <span className="w-1.5 h-1.5 rounded-full bg-bad inline-block" /> pocket clash at pose</span>
+          <span className="text-fg-3 text-[12px] hidden md:inline-flex items-center gap-1.5">ligand RMSD (Å) · <span className="w-1.5 h-1.5 rounded-full bg-warn inline-block" /> PoseBusters violation · <span className="w-1.5 h-1.5 rounded-full bg-bad inline-block" /> pocket clash at pose · <span className="w-1.5 h-1.5 rounded-full border border-fg-3 inline-block" /> missed pocket</span>
           <div className="ml-auto flex items-center gap-2">
             <Label>sort</Label>
             <Select value={sort} onChange={setSort} options={[{ value: 'similarity', label: 'Similarity' }, { value: 'pdb', label: 'PDB id' }, ...methods.map((m) => ({ value: m.id, label: `${m.name} RMSD` }))]} width={150} />
@@ -269,7 +270,7 @@ function Row({ s, data, methods }: { s: SystemSummary; data: IndexData; methods:
       </td>
       {methods.map((m) => {
         const r = resultFor(data, s.system_id, m.id)
-        return <td key={m.id} className="text-right tabular-nums"><RmsdCell rmsd={r?.ok ? r.rmsd : null} pb={r?.pb_pass} clashes={r?.clashes_pose} /></td>
+        return <td key={m.id} className="text-right tabular-nums"><RmsdCell rmsd={r?.ok ? r.rmsd : null} pb={r?.pb_pass} clashes={r?.clashes_pose} missed={r?.pocket_hit === false} /></td>
       })}
       <td className="text-right whitespace-nowrap">
         <Link className="btn" style={{ border: 'none', height: 24 }} to={`/system/${s.system_id}`}>
@@ -280,15 +281,16 @@ function Row({ s, data, methods }: { s: SystemSummary; data: IndexData; methods:
   )
 }
 
-export function RmsdCell({ rmsd, pb, clashes }: { rmsd: number | null | undefined; pb?: boolean | null; clashes?: number | null }) {
+export function RmsdCell({ rmsd, pb, clashes, missed }: { rmsd: number | null | undefined; pb?: boolean | null; clashes?: number | null; missed?: boolean }) {
   if (rmsd == null) return <span className="text-fg-3">–</span>
   const good = rmsd <= RMSD_SUCCESS
-  const notes = [pb === false ? 'PoseBusters violations' : null, clashes ? `${clashes} pocket clash${clashes > 1 ? 'es' : ''} at pose` : null].filter(Boolean).join(' · ')
+  const notes = [pb === false ? 'PoseBusters violations' : null, clashes ? `${clashes} pocket clash${clashes > 1 ? 'es' : ''} at pose` : null, missed ? 'missed the crystal pocket' : null].filter(Boolean).join(' · ')
   return (
     <span className={`chip ${good ? 'chip-ok' : 'chip-bad'}`} title={notes}>
       {rmsd.toFixed(2)}
       {pb === false && <span className="w-1.5 h-1.5 rounded-full bg-warn" />}
       {!!clashes && clashes > 0 && <span className="w-1.5 h-1.5 rounded-full bg-bad" />}
+      {missed && <span className="w-1.5 h-1.5 rounded-full border border-fg-3" />}
     </span>
   )
 }

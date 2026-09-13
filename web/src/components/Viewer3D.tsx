@@ -33,6 +33,10 @@ export interface ViewerProps {
   highlightAtoms?: number[] | null
   /** clash entry hovered in the panel: drawn emphasised, others dimmed */
   highlightClash?: ClashRef | null
+  /** residue label like "A:PHE46" whose side chain is drawn in the accent colour (contact chip hover) */
+  highlightResidue?: string | null
+  /** crystal-ligand atom indices to emphasise (lost contacts) */
+  highlightGtAtoms?: number[] | null
   /** fired (throttled) when the mouse enters / leaves a predicted-ligand atom */
   onAtomHover?: (atom: HoveredAtom | null) => void
   /** fired when the mouse enters / leaves a clash line or protein-atom marker in the viewer */
@@ -154,7 +158,7 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     styleAll(v, models.current, props)
     applyHoverable.current()
     v.render()
-  }, [props.showGtReceptor, props.showGtLigand, props.showPredLigand, props.showPredReceptor, props.showPocket, props.showViolations, props.trajectoryMode, props.diagnostics, props.highlightAtoms, props.highlightClash, props.atomDisplacement, props.predColor])
+  }, [props.showGtReceptor, props.showGtLigand, props.showPredLigand, props.showPredReceptor, props.showPocket, props.showViolations, props.trajectoryMode, props.diagnostics, props.highlightAtoms, props.highlightClash, props.highlightResidue, props.highlightGtAtoms, props.atomDisplacement, props.predColor])
 
   useEffect(() => {
     const v = viewer.current
@@ -292,6 +296,22 @@ function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
   }
 
   // hover highlight goes last so it wins over the violation sphere on the same atom
+  // contact-chip hover: residue side chain in the accent colour on whichever receptors are shown, plus crystal-ligand atoms
+  if (p.highlightResidue) {
+    const sel = parseResidue(p.highlightResidue)
+    if (sel) {
+      for (const rec of [p.showPredReceptor ? m.predRec : undefined, p.showGtReceptor ? m.gtRec : undefined]) {
+        if (!rec) continue
+        const chains = new Set((rec.selectedAtoms({}) as $3Dmol.AtomSpec[]).map((a) => a.chain))
+        const s: $3Dmol.AtomSelectionSpec = chains.has(sel.chain) ? { model: rec, chain: sel.chain, resi: sel.resi } : { model: rec, resi: sel.resi, resn: sel.resn }
+        v.addStyle(s, { stick: { radius: 0.3, colorscheme: { prop: 'elem', map: elemMap('#f2b01e') } } })
+      }
+    }
+  }
+  if (p.highlightGtAtoms && p.highlightGtAtoms.length && m.gtLig && p.showGtLigand) {
+    v.addStyle({ model: m.gtLig, index: p.highlightGtAtoms }, { sphere: { radius: 0.6, color: '#2f9e6b', opacity: 0.6 } })
+  }
+
   if (p.highlightAtoms && p.highlightAtoms.length && !p.highlightClash) {
     v.addStyle({ model: lig, index: p.highlightAtoms }, { sphere: { radius: 0.75, color: '#f2b01e', opacity: 0.85 } })
   }
@@ -316,6 +336,12 @@ function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
 /** clash-shape hover callbacks run inside 3Dmol's event loop; route them to the latest props */
 function propsOnClashHover(p: ViewerProps, ref: ClashRef | null) {
   p.onClashHover?.(ref)
+}
+
+/** "A:PHE46" or "1.A:PHE46" -> { chain, resn, resi } */
+function parseResidue(label: string): { chain: string; resn: string; resi: number } | null {
+  const m = /^(.*?):([A-Za-z]+)(-?\d+)$/.exec(label)
+  return m ? { chain: m[1], resn: m[2].toUpperCase(), resi: Number(m[3]) } : null
 }
 
 function elemMap(carbon: string): Record<string, string> {
