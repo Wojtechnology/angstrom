@@ -299,11 +299,14 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
                 minim, frames, mh = st.minimise_with_trajectory(lig)
             except Exception as e:  # noqa
                 minim = None
-            gz_write(sdir / f"{mid}_receptor.pdb.gz", pdb_text)
+            if m["kind"] != "docking":  # docked poses sit in the crystal receptor: reuse gt_receptor.pdb
+                gz_write(sdir / f"{mid}_receptor.pdb.gz", pdb_text)
             gz_write(sdir / f"{mid}_ligand.sdf.gz", st.mol_to_sdf(Chem.RemoveHs(lig), f"{mid} prediction"))
             if minim is not None:
                 gz_write(sdir / f"{mid}_traj.sdf.gz", st.frames_to_sdf(mh, frames, minim["energies"]))
             pocket_min = _pocket_minimisation(lig, pdb_text, sdir, mid)
+            pocket_files = ({"pocket_traj": f"{mid}_pocket_traj.sdf", "pocket_traj_pdb": f"{mid}_pocket_traj.pdb"}
+                            if pocket_min.get("ok") else {})
             res = {
                 "ok": True, "seed": str(seed), "sample": str(sample),
                 "ranking_score": _f(row.get("ranking_score")),
@@ -312,8 +315,8 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
                 "superposition": {k: (round(v, 3) if isinstance(v, float) else v) for k, v in sup.items() if k not in ("R", "t")},
                 "posebusters": pb_res, "pb_pass": pb_pass, "diagnostics": diag, "minimisation": minim,
                 "pocket_minimisation": pocket_min, "contacts": contacts, "pocket_hit": hit,
-                "files": {"receptor": f"{mid}_receptor.pdb", "ligand": f"{mid}_ligand.sdf", "traj": f"{mid}_traj.sdf",
-                          "pocket_traj": f"{mid}_pocket_traj.sdf", "pocket_traj_pdb": f"{mid}_pocket_traj.pdb"},
+                "files": {"receptor": "gt_receptor.pdb" if m["kind"] == "docking" else f"{mid}_receptor.pdb",
+                          "ligand": f"{mid}_ligand.sdf", "traj": f"{mid}_traj.sdf", **pocket_files},
                 "model_file": str(path.relative_to(RAW)),
                 "vina_score": _f(row.get("vina_score")), "pose_scores": row.get("pose_scores"),
             }
@@ -401,7 +404,16 @@ def main():
             continue
         d = json.loads(p.read_text())
         fresh = system_meta(sid, ann, inputs, sim)  # keep per-system meta in sync with the index
-        if any(d.get(k) != v for k, v in fresh.items()):
+        changed = any(d.get(k) != v for k, v in fresh.items())
+        for m in METHODS:  # docking rows share the crystal receptor file
+            r = d["methods"].get(m["id"])
+            if m["kind"] == "docking" and r and r.get("ok") and r["files"].get("receptor") != "gt_receptor.pdb":
+                r["files"]["receptor"] = "gt_receptor.pdb"; changed = True
+            if r and r.get("ok") and not (r.get("pocket_minimisation") or {}).get("ok"):
+                for k in ("pocket_traj", "pocket_traj_pdb"):  # never written when the pocket step failed
+                    if k in r["files"]:
+                        del r["files"][k]; changed = True
+        if changed:
             d.update(fresh)
             p.write_text(json.dumps(d, separators=(",", ":")))
         gpm = (d.get("gt") or {}).get("pocket_minimisation") or {}
