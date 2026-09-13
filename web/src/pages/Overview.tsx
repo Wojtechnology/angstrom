@@ -141,13 +141,6 @@ export default function Overview() {
       <div className="flex flex-wrap items-end gap-4 justify-between">
         <div>
           <h1 className="text-[18px] font-semibold">Which co-folding models learn physical priors?</h1>
-          <p className="text-fg-2 mt-1 max-w-[760px]">
-            Top-ranked poses from {data.methods.length} methods on {data.systems.length} Runs N&apos; Poses systems, bucketed by SuCOS-pocket
-            similarity to the closest training structure. A model that has learned physical priors keeps producing plausible poses (no clashes,
-            low strain, favourable interaction energy) as similarity drops, while a model leaning on memorised complexes degrades; rigid holo
-            redocking with Vina is shown as a physics-only baseline. RMSD success (≤ {RMSD_SUCCESS} Å) is shown by default and the Metric
-            selector switches to the physics checks.
-          </p>
         </div>
       </div>
 
