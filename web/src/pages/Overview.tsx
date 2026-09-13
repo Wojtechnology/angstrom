@@ -139,11 +139,13 @@ export default function Overview() {
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end gap-4 justify-between">
         <div>
-          <h1 className="text-[18px] font-semibold">Do co-folding models generalise, or remember?</h1>
-          <p className="text-fg-2 mt-1 max-w-[720px]">
-            Top-ranked poses from {data.methods.length} methods on {data.systems.length} Runs N&apos; Poses systems, bucketed by the
-            similarity of each system to its closest structure in the training set. Success is ligand RMSD ≤ {RMSD_SUCCESS} Å after
-            binding-site superposition; physical checks come from PoseBusters and restrained MMFF94s relaxation of the pocket.
+          <h1 className="text-[18px] font-semibold">Which co-folding models learn physical priors?</h1>
+          <p className="text-fg-2 mt-1 max-w-[760px]">
+            Top-ranked poses from {data.methods.length} methods on {data.systems.length} Runs N&apos; Poses systems, bucketed by SuCOS-pocket
+            similarity to the closest training structure. A model that has learned physical priors keeps producing plausible poses (no clashes,
+            low strain, favourable interaction energy) as similarity drops, while a model leaning on memorised complexes degrades; rigid holo
+            redocking with Vina is shown as a physics-only baseline. RMSD success (≤ {RMSD_SUCCESS} Å) is shown by default and the Metric
+            selector switches to the physics checks.
           </p>
         </div>
       </div>
@@ -187,7 +189,7 @@ export default function Overview() {
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card p-4">
           <div className="flex items-baseline justify-between mb-1 gap-2">
-            <h2 className="font-medium truncate">{metricD.kind === 'rate' ? metricD.short.replace(/^% /, '') : metricD.short} by similarity bucket</h2>
+            <h2 className="font-medium truncate">{metricD.kind === 'rate' ? metricD.short.replace(/^% /, '') : metricD.short} by similarity to the closest training structure</h2>
             <span className="text-[11px] text-fg-3 whitespace-nowrap">training cutoff {data.default_cutoff} · {systems.length} systems</span>
           </div>
           <Plot
@@ -201,7 +203,7 @@ export default function Overview() {
         </div>
         <div className="card p-4">
           <div className="flex items-center justify-between mb-1 gap-2 flex-wrap">
-            <h2 className="font-medium">{yDef.label.replace(/ \(.*\)$/, '')} vs. similarity</h2>
+            <h2 className="font-medium">{yDef.label.replace(/ \(.*\)$/, '')} vs. similarity to the closest training structure</h2>
             <div className="flex items-center gap-2">
               <span className="text-[11px] text-fg-3 hidden xl:inline">click a point to open it</span>
               <Select value={scatterY} onChange={setScatterY} options={yOptions} width={210} />
