@@ -13,7 +13,7 @@ RAW = Path(__file__).parent / "raw"
 METHODS_REQUIRED = ["af3", "af3_no_template", "boltz", "boltz1x", "chai", "protenix"]
 METHODS_OPTIONAL = ["boltz2", "rfaa"]
 BUCKETS = [(0, 20), (20, 40), (40, 60), (60, 80), (80, 101)]
-PER_BUCKET = 10
+PER_BUCKET = 30
 MAX_SEQ_LEN = 450
 SEED = 0
 
@@ -46,13 +46,20 @@ print("candidates:", len(cand))
 rng = np.random.default_rng(SEED)
 chosen = []
 used_pdb, used_cluster = set(), set()
+# keep systems from an earlier, smaller selection so already-processed data is reused
+prior = Path(__file__).parent / "subset_50.json"
+prior_ids = set(json.load(open(prior))["systems"]) if prior.exists() else set()
+for _, r in cand[cand["system_id"].isin(prior_ids)].iterrows():
+    chosen.append(r); used_pdb.add(r["entry_pdb_id"]); used_cluster.add(r["cluster"])
 for lo, hi in BUCKETS:
     b = cand[(cand["similarity"] >= lo) & (cand["similarity"] < hi)].copy()
     b["rand"] = rng.random(len(b))
     # prefer systems covered by every method, then random
     b = b.sort_values(["has_boltz2", "has_rfaa", "rand"], ascending=[False, False, True])
-    n = 0
+    n = int(b["system_id"].isin(prior_ids).sum())
     for _, r in b.iterrows():
+        if r["system_id"] in prior_ids:
+            continue
         if r["entry_pdb_id"] in used_pdb or r["cluster"] in used_cluster:
             continue
         chosen.append(r)

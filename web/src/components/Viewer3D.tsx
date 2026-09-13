@@ -7,6 +7,8 @@ export interface ViewerHandle {
   setFrame: (i: number) => void
 }
 
+export interface HoveredAtom { index: number; elem: string }
+
 export interface ViewerProps {
   gtReceptor: string
   gtLigand: string
@@ -16,8 +18,10 @@ export interface ViewerProps {
   pocketTraj?: string | null
   pocketTrajPdb?: string | null
   predColor: string
-  showPredReceptor: boolean
+  showGtReceptor: boolean
   showGtLigand: boolean
+  showPredLigand: boolean
+  showPredReceptor: boolean
   showPocket: boolean
   showViolations: boolean
   trajectoryMode: 'off' | 'ligand' | 'pocket'
@@ -25,10 +29,12 @@ export interface ViewerProps {
   diagnostics?: Diagnostics | null
   atomDisplacement?: number[] | null
   highlightAtoms?: number[] | null
-  onAtomHover?: (label: string | null) => void
+  /** fired (throttled) when the mouse enters / leaves a predicted-ligand atom */
+  onAtomHover?: (atom: HoveredAtom | null) => void
 }
 
 const GT_LIGAND = '#2f9e6b'
+const POCKET_CUTOFF = 4.5
 
 /**
  * 3Dmol.js scene: ground-truth receptor (cartoon) + ligand (sticks) and the selected
@@ -42,6 +48,8 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
   const loadedKey = useRef<string>('')
   const propsRef = useRef(props)
   propsRef.current = props
+  const hoverLabel = useRef<$3Dmol.Label | null>(null)
+  const lastHover = useRef<number | null>(null)
   const [glError, setGlError] = useState<string | null>(null)
 
   useImperativeHandle(ref, () => ({
@@ -82,7 +90,8 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     if (key === loadedKey.current) return
     loadedKey.current = key
     v.removeAllModels(); v.removeAllShapes(); v.removeAllLabels()
-    const m: typeof models.current = {}
+    hoverLabel.current = null
+    const m: Models = {}
     m.gtRec = v.addModel(props.gtReceptor, 'pdb')
     m.gtLig = v.addModel(props.gtLigand, 'sdf')
     if (props.predReceptor) m.predRec = v.addModel(props.predReceptor, 'pdb')
@@ -90,7 +99,35 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     if (props.predTraj) m.traj = v.addModelsAsFrames(props.predTraj, 'sdf')
     if (props.pocketTraj) m.pocketTraj = v.addModelsAsFrames(props.pocketTraj, 'sdf')
     if (props.pocketTrajPdb) m.pocketRec = v.addModelsAsFrames(props.pocketTrajPdb, 'pdb')
+    // pocket residues are computed geometrically (chain names differ between CIF-derived lists and the PDB files)
+    const ligRef = m.predLig ?? m.gtLig
+    m.gtPocket = pocketSelection(m.gtRec, ligRef)
+    m.predPocket = m.predRec ? pocketSelection(m.predRec, ligRef) : []
     models.current = m
+
+    // reverse hover: ligand atom under the mouse -> label + callback (throttled by atom identity)
+    if (m.predLig) {
+      const enter = (atom: $3Dmol.AtomSpec) => {
+        if (atom.index == null || atom.index === lastHover.current) return
+        lastHover.current = atom.index
+        if (hoverLabel.current) { v.removeLabel(hoverLabel.current); hoverLabel.current = null }
+        hoverLabel.current = v.addLabel(`${atom.elem ?? ''}${atom.index + 1}`, {
+          position: { x: atom.x!, y: atom.y!, z: atom.z! }, backgroundColor: '#1c1c22', backgroundOpacity: 0.85,
+          fontColor: '#ffffff', fontSize: 11, borderThickness: 0, inFront: true, alignment: 'bottomLeft', screenOffset: { x: 8, y: -8 },
+        } as $3Dmol.LabelSpec)
+        v.render()
+        propsRef.current.onAtomHover?.({ index: atom.index, elem: atom.elem ?? '' })
+      }
+      const leave = () => {
+        if (lastHover.current == null) return
+        lastHover.current = null
+        if (hoverLabel.current) { v.removeLabel(hoverLabel.current); hoverLabel.current = null; v.render() }
+        propsRef.current.onAtomHover?.(null)
+      }
+      v.setHoverDuration(60)
+      v.setHoverable({ model: m.predLig }, true, enter, leave)
+    }
+
     styleAll(v, m, propsRef.current)
     v.zoomTo({ model: m.predLig ?? m.gtLig })
     v.zoom(0.8)
@@ -103,7 +140,7 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     if (!v || !models.current.gtRec) return
     styleAll(v, models.current, props)
     v.render()
-  }, [props.showPredReceptor, props.showGtLigand, props.showPocket, props.showViolations, props.trajectoryMode, props.diagnostics, props.highlightAtoms, props.atomDisplacement, props.predColor])
+  }, [props.showGtReceptor, props.showGtLigand, props.showPredLigand, props.showPredReceptor, props.showPocket, props.showViolations, props.trajectoryMode, props.diagnostics, props.highlightAtoms, props.atomDisplacement, props.predColor])
 
   useEffect(() => {
     const v = viewer.current
@@ -122,46 +159,77 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
 
 export default Viewer3D
 
-type Models = { gtRec?: $3Dmol.GLModel; gtLig?: $3Dmol.GLModel; predRec?: $3Dmol.GLModel; predLig?: $3Dmol.GLModel; traj?: $3Dmol.GLModel; pocketTraj?: $3Dmol.GLModel; pocketRec?: $3Dmol.GLModel }
+type ResidueSel = { chain: string; resi: number[] }
+type Models = {
+  gtRec?: $3Dmol.GLModel; gtLig?: $3Dmol.GLModel; predRec?: $3Dmol.GLModel; predLig?: $3Dmol.GLModel
+  traj?: $3Dmol.GLModel; pocketTraj?: $3Dmol.GLModel; pocketRec?: $3Dmol.GLModel
+  gtPocket?: ResidueSel[]; predPocket?: ResidueSel[]
+}
+
+/** Residues of `rec` with any heavy atom within POCKET_CUTOFF of any atom of `lig`, grouped by chain. */
+function pocketSelection(rec: $3Dmol.GLModel, lig: $3Dmol.GLModel | undefined): ResidueSel[] {
+  if (!lig) return []
+  const L = (lig.selectedAtoms({}) as $3Dmol.AtomSpec[]).filter((a) => a.x != null)
+  const R = rec.selectedAtoms({}) as $3Dmol.AtomSpec[]
+  const c2 = POCKET_CUTOFF * POCKET_CUTOFF
+  const hits = new Map<string, Set<number>>()
+  for (const a of R) {
+    if (a.x == null || a.resi == null) continue
+    for (const l of L) {
+      const dx = a.x - l.x!, dy = a.y! - l.y!, dz = a.z! - l.z!
+      if (dx * dx + dy * dy + dz * dz <= c2) {
+        const ch = a.chain ?? ''
+        if (!hits.has(ch)) hits.set(ch, new Set())
+        hits.get(ch)!.add(Number(a.resi))
+        break
+      }
+    }
+  }
+  return [...hits.entries()].map(([chain, s]) => ({ chain, resi: [...s] }))
+}
 
 function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
   v.removeAllShapes()
-  v.removeAllLabels()
   const hide: $3Dmol.AtomStyleSpec = {}  // empty style = not drawn
 
   const pocketMode = p.trajectoryMode === 'pocket' && !!m.pocketTraj
   const ligandMode = p.trajectoryMode === 'ligand' && !!m.traj
   const showTraj = pocketMode || ligandMode
+  const pocketStick = { stick: { radius: 0.12, colorscheme: 'whiteCarbon' } }
 
   // ground-truth receptor: light cartoon; pocket residues as thin sticks (static ones hidden while the pocket animates)
   if (m.gtRec) {
-    v.setStyle({ model: m.gtRec }, { cartoon: { color: '#d9d9de', opacity: 0.9 } })
-    if (p.showPocket && m.gtLig && !pocketMode) {
-      v.addStyle({ model: m.gtRec, within: { distance: 4.5, sel: { model: m.predLig ?? m.gtLig } } } as $3Dmol.AtomSelectionSpec, { stick: { radius: 0.12, colorscheme: 'whiteCarbon' } })
+    v.setStyle({ model: m.gtRec }, p.showGtReceptor ? { cartoon: { color: '#d9d9de', opacity: 0.9 } } : hide)
+    if (p.showGtReceptor && p.showPocket && !pocketMode) {
+      for (const sel of m.gtPocket ?? []) v.addStyle({ model: m.gtRec, chain: sel.chain, resi: sel.resi }, pocketStick)
     }
   }
   if (m.predRec) {
-    v.setStyle({ model: m.predRec }, p.showPredReceptor ? { cartoon: { color: p.predColor, opacity: 0.45 } } : hide)
+    v.setStyle({ model: m.predRec }, p.showPredReceptor ? { cartoon: { color: p.predColor, opacity: 0.55 } } : hide)
+    if (p.showPredReceptor && p.showPocket && !pocketMode) {
+      for (const sel of m.predPocket ?? []) v.addStyle({ model: m.predRec, chain: sel.chain, resi: sel.resi }, { stick: { radius: 0.12, colorscheme: { prop: 'elem', map: elemMap(lighten(p.predColor, 0.45)) } } })
+    }
   }
   if (m.gtLig) {
     v.setStyle({ model: m.gtLig }, p.showGtLigand ? { stick: { radius: 0.18, colorscheme: { prop: 'elem', map: elemMap(GT_LIGAND) } } } : hide)
   }
+  const predVisible = p.showPredLigand
   if (m.predLig) {
-    v.setStyle({ model: m.predLig }, showTraj ? hide : { stick: { radius: 0.22, colorscheme: { prop: 'elem', map: elemMap(p.predColor) } } })
+    v.setStyle({ model: m.predLig }, showTraj || !predVisible ? hide : { stick: { radius: 0.22, colorscheme: { prop: 'elem', map: elemMap(p.predColor) } } })
   }
   if (m.traj) {
-    v.setStyle({ model: m.traj }, ligandMode ? { stick: { radius: 0.22, colorscheme: { prop: 'elem', map: elemMap(p.predColor) } } } : hide)
+    v.setStyle({ model: m.traj }, ligandMode && predVisible ? { stick: { radius: 0.22, colorscheme: { prop: 'elem', map: elemMap(p.predColor) } } } : hide)
   }
   if (m.pocketTraj) {
-    v.setStyle({ model: m.pocketTraj }, pocketMode ? { stick: { radius: 0.22, colorscheme: { prop: 'elem', map: elemMap(p.predColor) } } } : hide)
+    v.setStyle({ model: m.pocketTraj }, pocketMode && predVisible ? { stick: { radius: 0.22, colorscheme: { prop: 'elem', map: elemMap(p.predColor) } } } : hide)
   }
   if (m.pocketRec) {
     // animated pocket heavy atoms (protein restrained, so they move only slightly)
-    v.setStyle({ model: m.pocketRec }, pocketMode ? { stick: { radius: 0.12, colorscheme: 'whiteCarbon' } } : hide)
+    v.setStyle({ model: m.pocketRec }, pocketMode && p.showPocket ? pocketStick : hide)
   }
 
   const lig = pocketMode ? m.pocketTraj : ligandMode ? m.traj : m.predLig
-  if (!lig) return
+  if (!lig || !predVisible) return
 
   if (p.showViolations && p.diagnostics && !showTraj) {
     const d = p.diagnostics
@@ -171,14 +239,14 @@ function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
     const ligAtoms = lig.selectedAtoms({}) as $3Dmol.AtomSpec[]
     for (const c of d.protein_clashes) {
       const a = ligAtoms[c.atom]
-      const target = m.gtRec && !p.showPredReceptor ? m.gtRec : (m.predRec ?? m.gtRec)
-      const pa = target?.selectedAtoms({ chain: c.protein.chain, resi: c.protein.resnum, atom: c.protein.atom }) as $3Dmol.AtomSpec[] | undefined
-      // clash was measured against the predicted receptor; draw against it when available
-      const ref = (m.predRec?.selectedAtoms({ chain: c.protein.chain, resi: c.protein.resnum, atom: c.protein.atom }) as $3Dmol.AtomSpec[] | undefined) ?? pa
-      const b = ref && ref.length ? ref[0] : undefined
+      // clash was measured against the predicted receptor; draw against it, falling back to the GT receptor
+      const sel = { chain: c.protein.chain, resi: c.protein.resnum, atom: c.protein.atom }
+      const ref = (m.predRec?.selectedAtoms(sel) as $3Dmol.AtomSpec[] | undefined) ?? []
+      const b = ref.length ? ref[0] : ((m.gtRec?.selectedAtoms(sel) as $3Dmol.AtomSpec[] | undefined) ?? [])[0]
       if (a && b && a.x != null && b.x != null) {
         v.addCylinder({ start: { x: a.x, y: a.y!, z: a.z! }, end: { x: b.x, y: b.y!, z: b.z! }, radius: 0.06, dashed: true, color: '#d64545', fromCap: 1, toCap: 1 })
-        v.addSphere({ center: { x: b.x, y: b.y!, z: b.z! }, radius: 0.35, color: '#d64545', alpha: 0.35 })
+        const hl = p.highlightAtoms?.includes(c.atom)
+        v.addSphere({ center: { x: b.x, y: b.y!, z: b.z! }, radius: hl ? 0.5 : 0.35, color: hl ? '#f2b01e' : '#d64545', alpha: hl ? 0.85 : 0.35 })
       }
     }
     for (const c of d.intra_clashes) {
@@ -218,3 +286,5 @@ function lerpColor(a: string, b: string, t: number): string {
   const ch = (s: number) => Math.round(((pa >> s) & 255) * (1 - t) + ((pb >> s) & 255) * t)
   return `#${[16, 8, 0].map((s) => ch(s).toString(16).padStart(2, '0')).join('')}`
 }
+
+const lighten = (c: string, t: number) => lerpColor(c, '#ffffff', t)

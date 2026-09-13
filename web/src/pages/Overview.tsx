@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowUpRight } from 'lucide-react'
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js-basic-dist-min'
-import { fetchIndex, type IndexData, type SystemSummary } from '../lib/api'
+import { fetchIndex, isDocking, methodPlotName, methodShortName, methodTileLabel, type IndexData, type SystemSummary } from '../lib/api'
 import {
   axisAvailable, bucketLabel, bucketOf, clampOutliers, fmt, formatMetric, metricDef, methodStats, METRICS, resultFor,
   RMSD_SUCCESS, SCATTER_Y, scatterYDef, SIM_AXES, similarityAt, type MetricKey, type ScatterY, type SimAxis,
 } from '../lib/stats'
-import { ErrorBox, Label, Select, Spinner, Stat, Tip } from '../components/ui'
+import { ErrorBox, Label, MethodBadge, Select, Spinner, Stat, Tip } from '../components/ui'
 import Plot from '../components/Plot'
 
 type SortKey = 'similarity' | 'pdb' | string
@@ -49,21 +49,27 @@ export default function Overview() {
   const metricD = metricDef(metric)
   const yDef = scatterYDef(scatterY)
 
-  const systems = useMemo(() => (data ? data.systems : []), [data])
+  // systems released on or before the selected cutoff would be inside the training set: hide them
+  const systems = useMemo(() => (data && cutoff ? data.systems.filter((s) => !s.release_date || s.release_date > cutoff) : []), [data, cutoff])
+  const nHidden = data ? data.systems.length - systems.length : 0
   const stats = useMemo(() => (data ? methods.map((m) => methodStats(data, systems, m.id, metric)) : []), [data, methods, systems, metric])
 
   const bucketPlot = useMemo<Data[]>(() => {
     if (!data || !cutoff) return []
-    const byBucket = data.buckets.map((_, bi) => data.systems.filter((s) => bucketOf(similarityAt(s, cutoff, axis), data.buckets) === bi))
+    const byBucket = data.buckets.map((_, bi) => systems.filter((s) => bucketOf(similarityAt(s, cutoff, axis), data.buckets) === bi))
     return methods.map((m) => {
       const st = byBucket.map((inBucket) => methodStats(data, inBucket, m.id, metric))
       const ys = st.map((x) => (x.value == null ? null : metricD.kind === 'rate' ? x.value * 100 : x.value))
       const hover = metricD.kind === 'rate'
         ? `${m.name}<br>%{x} similarity: %{y:.0f}% ${metricD.short.replace(/^% /, '')}<br>n=%{customdata}<extra></extra>`
         : `${m.name}<br>%{x} similarity: %{y:.1f} ${metricD.unit}<br>n=%{customdata}<extra></extra>`
-      return { type: 'bar', name: m.name, x: data.buckets.map(bucketLabel), y: ys, marker: { color: m.color }, hovertemplate: hover, customdata: st.map((x) => x.n) } as Data
+      const dock = isDocking(m)
+      const marker = dock
+        ? { color: m.color, opacity: 0.35, line: { color: m.color, width: 2 }, pattern: { shape: '/', fgcolor: m.color, bgcolor: '#ffffff', size: 6, solidity: 0.4 } }
+        : { color: m.color }
+      return { type: 'bar', name: methodPlotName(m), x: data.buckets.map(bucketLabel), y: ys, marker, hovertemplate: hover, customdata: st.map((x) => x.n) } as Data
     })
-  }, [data, methods, cutoff, axis, metric, metricD])
+  }, [data, methods, systems, cutoff, axis, metric, metricD])
 
   const scatter = useMemo(() => {
     if (!data || !cutoff) return { traces: [] as Data[], cap: null as number | null, nClamped: 0 }
@@ -82,11 +88,11 @@ export default function Overview() {
       const idx = all.map((p, i) => (p.m === m.id ? i : -1)).filter((i) => i >= 0)
       const pts = idx.map((i) => all[i])
       return {
-        type: 'scatter', mode: 'markers', name: m.name,
+        type: 'scatter', mode: 'markers', name: methodPlotName(m),
         x: pts.map(({ s }) => similarityAt(s, cutoff, axis)),
         y: idx.map((i) => clamped.ys[i]),
         customdata: pts.map(({ s }, k) => [s.system_id, m.id, s.pdb_id.toUpperCase(), all[idx[k]].y]),
-        marker: { size: 7, color: m.color, symbol: idx.map((i) => (clamped.cap != null && all[i].y > clamped.cap ? 'triangle-up' : 'circle')), line: { width: pts.map((p) => (p.flagged ? 1.5 : 1)), color: pts.map((p) => (p.flagged ? '#d64545' : '#ffffff')) } },
+        marker: { size: isDocking(m) ? 8 : 7, color: m.color, symbol: idx.map((i) => (clamped.cap != null && all[i].y > clamped.cap ? 'triangle-up' : isDocking(m) ? 'diamond' : 'circle')), line: { width: pts.map((p) => (p.flagged ? 1.5 : 1)), color: pts.map((p) => (p.flagged ? '#d64545' : '#ffffff')) } },
         hovertemplate: `%{customdata[2]} · ${m.name} · %{customdata[3]:.2f} ${yDef.unit} · similarity %{x:.0f}<extra></extra>`,
       } as Data
     })
@@ -159,6 +165,7 @@ export default function Overview() {
                 <button key={m.id} type="button" className="btn" data-active={on} style={on ? undefined : { color: 'var(--color-fg-3)' }} onClick={() => toggleMethod(m.id)} aria-pressed={on}>
                   <span className="w-2 h-2 rounded-full" style={{ background: m.color, opacity: on ? 1 : 0.4 }} />
                   {m.name}
+                  <MethodBadge method={m} />
                 </button>
               )
             })}
@@ -176,6 +183,11 @@ export default function Overview() {
           <Label>Metric</Label>
           <Select value={metric} onChange={setMetric} options={metricOptions} width={250} />
         </div>
+        {nHidden > 0 && (
+          <div className="text-[11px] text-fg-3 lg:col-span-4">
+            {nHidden} system{nHidden > 1 ? 's' : ''} released on or before this cutoff {nHidden > 1 ? 'are' : 'is'} hidden (they would be inside the training set).
+          </div>
+        )}
       </div>
 
       <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(auto-fit, minmax(150px, 1fr))` }}>
@@ -184,9 +196,9 @@ export default function Overview() {
           return (
             <Stat
               key={s.method}
-              label={<span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full" style={{ background: m.color }} />{m.name}</span>}
+              label={<span className="flex items-center gap-1.5 flex-wrap"><span className="w-2 h-2 rounded-full" style={{ background: m.color }} />{methodTileLabel(m)}<MethodBadge method={m} /></span>}
               value={formatMetric(metricD, s.value)}
-              sub={metric === 'success' ? `median ${fmt(s.medianRmsd)} Å · n=${s.n}` : `${metricD.kind === 'rate' ? 'rate' : `median ${metricD.unit}`} · ${fmt(s.successRate == null ? null : s.successRate * 100, 0)}% ≤ ${RMSD_SUCCESS} Å · n=${s.n}`}
+              sub={metric === 'success' ? `median ${fmt(s.medianRmsd)} Å · n=${s.n}` : `${metricD.kind === 'rate' ? 'rate' : `median ${metricD.unit} · lower is better`} · ${fmt(s.successRate == null ? null : s.successRate * 100, 0)}% ≤ ${RMSD_SUCCESS} Å · n=${s.n}`}
             />
           )
         })}
@@ -196,7 +208,7 @@ export default function Overview() {
         <div className="card p-4">
           <div className="flex items-baseline justify-between mb-1 gap-2">
             <h2 className="font-medium truncate">{metricD.kind === 'rate' ? metricD.short.replace(/^% /, '') : metricD.short} by similarity bucket</h2>
-            <span className="text-[11px] text-fg-3 whitespace-nowrap">cutoff {cutoff} · {data.systems.length} systems</span>
+            <span className="text-[11px] text-fg-3 whitespace-nowrap">cutoff {cutoff} · {systems.length} systems</span>
           </div>
           <Plot
             data={bucketPlot}
@@ -238,7 +250,7 @@ export default function Overview() {
                 <th>System</th>
                 <th>Ligand</th>
                 <th className="text-right" title={axisDef.axisTitle}>{axisDef.short}</th>
-                {methods.map((m) => <th key={m.id} className="text-right">{m.name}</th>)}
+                {methods.map((m) => <th key={m.id} className="text-right"><span className="inline-flex items-center gap-1.5 justify-end">{isDocking(m) ? methodShortName(m) : m.name}<MethodBadge method={m} /></span></th>)}
                 <th></th>
               </tr>
             </thead>

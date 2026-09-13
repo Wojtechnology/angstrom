@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, ExternalLink, Pause, Play, Focus, Check, X, Minus } from 'lucide-react'
 import type { Data } from 'plotly.js-basic-dist-min'
-import { fetchIndex, fetchStructure, fetchSystem, PB_CHECK_LABELS, PB_VALIDITY_CHECKS, rcsbUrl, type IndexData, type MethodDetail, type PocketMinimisation, type SystemDetail } from '../lib/api'
+import { fetchIndex, fetchStructure, fetchSystem, isDocking, PB_CHECK_LABELS, PB_VALIDITY_CHECKS, rcsbUrl, type IndexData, type MethodDetail, type PocketMinimisation, type SystemDetail } from '../lib/api'
 import { fmt, RMSD_SUCCESS } from '../lib/stats'
-import { ErrorBox, Label, Select, Spinner, Switch, Tip } from '../components/ui'
-import Viewer3D, { type ViewerHandle } from '../components/Viewer3D'
+import { Checkbox, ErrorBox, Label, MethodBadge, Select, Spinner, Tip } from '../components/ui'
+import Viewer3D, { type HoveredAtom, type ViewerHandle } from '../components/Viewer3D'
 import Plot from '../components/Plot'
 
 interface Structures { gtReceptor: string; gtLigand: string; predReceptor: string | null; predLigand: string | null; predTraj: string | null; pocketTraj: string | null; pocketTrajPdb: string | null }
@@ -18,8 +18,11 @@ export default function SystemView() {
   const [sys, setSys] = useState<SystemDetail | null>(null)
   const [error, setError] = useState<unknown>(null)
   const [structures, setStructures] = useState<Structures | null>(null)
-  const [showPredReceptor, setShowPredReceptor] = useState(false)
   const [showGtLigand, setShowGtLigand] = useState(true)
+  const [showGtReceptor, setShowGtReceptor] = useState(true)
+  const [showPredLigand, setShowPredLigand] = useState(true)
+  const [showPredReceptor, setShowPredReceptor] = useState(false)
+  const [hoveredAtom, setHoveredAtom] = useState<HoveredAtom | null>(null)
   const [showPocket, setShowPocket] = useState(true)
   const [showViolations, setShowViolations] = useState(true)
   const [trajectoryMode, setTrajectoryMode] = useState<TrajMode>('off')
@@ -73,7 +76,8 @@ export default function SystemView() {
     const t = setInterval(() => setFrame((f) => (f + 1) % nFrames), 120)
     return () => clearInterval(t)
   }, [playing, trajectoryMode, nFrames])
-  useEffect(() => { setFrame(0); setPlaying(false); setHighlight(null) }, [method])
+  useEffect(() => { setFrame(0); setPlaying(false); setHighlight(null); setHoveredAtom(null) }, [method])
+  const onAtomHover = useCallback((a: HoveredAtom | null) => setHoveredAtom(a), [])
   useEffect(() => { setFrame(0); setPlaying(trajectoryMode !== 'off') }, [trajectoryMode])
 
   const energyPlot = useMemo<Data[]>(() => {
@@ -131,6 +135,7 @@ export default function SystemView() {
             <button key={m.id} className="btn" data-active={active} disabled={!d?.ok} onClick={() => setMethod(m.id)} title={d?.ok ? '' : d?.error ?? 'not available'}>
               <span className="w-2 h-2 rounded-full" style={{ background: m.color }} />
               {m.name}
+              <MethodBadge method={m} />
               {d?.ok && <span className={`mono ${d.rmsd! <= RMSD_SUCCESS ? 'text-ok' : 'text-bad'}`}>{fmt(d.rmsd)} Å</span>}
               {d?.ok && d.pb_pass === false && <span className="w-1.5 h-1.5 rounded-full bg-warn" title="PoseBusters violations" />}
             </button>
@@ -138,25 +143,15 @@ export default function SystemView() {
         })}
       </div>
 
+      {isDocking(index.methods.find((m) => m.id === method)) && (
+        <div className="text-[12px] text-fg-2 bg-warn-2 border border-[#f3dfb5] rounded-md px-3 py-2">
+          Rigid holo redocking baseline: the receptor is the experimental structure, so only the ligand pose is predicted.
+        </div>
+      )}
+
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start">
         {/* viewer */}
         <div className="card overflow-hidden flex flex-col lg:sticky lg:top-16">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 border-b hairline">
-            <Switch checked={showGtLigand} onChange={setShowGtLigand} label={<span><span className="inline-block w-2 h-2 rounded-full bg-ok mr-1" />ground truth ligand</span>} />
-            <Switch checked={showPredReceptor} onChange={setShowPredReceptor} label="predicted receptor" />
-            <Switch checked={showPocket} onChange={setShowPocket} label="pocket residues" />
-            <Switch checked={showViolations} onChange={setShowViolations} label="violations" />
-            <span className="flex items-center gap-2 text-[12px] text-fg-2">
-              trajectory
-              <Select<TrajMode>
-                value={trajectoryMode}
-                onChange={setTrajectoryMode}
-                width={150}
-                options={[{ value: 'off', label: 'off' }, { value: 'ligand', label: 'ligand only' }, ...(hasPocketTraj ? [{ value: 'pocket' as TrajMode, label: 'ligand + pocket' }] : [])]}
-              />
-            </span>
-            <button className="btn ml-auto" style={{ border: 'none' }} onClick={() => viewer.current?.zoomToLigand()}><Focus size={13} /> ligand</button>
-          </div>
           <div className="relative" style={{ height: 520 }}>
             {structures ? (
               <Viewer3D
@@ -169,8 +164,10 @@ export default function SystemView() {
                 pocketTraj={structures.pocketTraj}
                 pocketTrajPdb={structures.pocketTrajPdb}
                 predColor={color}
-                showPredReceptor={showPredReceptor}
+                showGtReceptor={showGtReceptor}
                 showGtLigand={showGtLigand}
+                showPredLigand={showPredLigand}
+                showPredReceptor={showPredReceptor}
                 showPocket={showPocket}
                 showViolations={showViolations}
                 trajectoryMode={trajectoryMode}
@@ -178,13 +175,40 @@ export default function SystemView() {
                 diagnostics={detail?.diagnostics}
                 atomDisplacement={trajectoryMode === 'pocket' ? pocket?.ligand_atom_displacement : detail?.minimisation?.atom_displacement}
                 highlightAtoms={highlight}
+                onAtomHover={onAtomHover}
               />
             ) : <Spinner label="Loading structures" />}
             <div className="absolute left-3 bottom-3 flex items-center gap-3 text-[11px] text-fg-2 bg-panel/85 backdrop-blur px-2.5 py-1.5 rounded-md border hairline">
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: color }} />{methodName(index, method)}</span>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-ok" />ground truth</span>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-bad/50" />violation</span>
+              {hoveredAtom && <span className="mono text-fg">{hoveredAtom.elem}{hoveredAtom.index + 1}</span>}
             </div>
+          </div>
+          {/* control strip */}
+          <div className="border-t hairline px-4 py-2.5 flex flex-wrap items-center gap-x-6 gap-y-2">
+            <div className="grid grid-cols-[auto_auto_auto] gap-x-3 gap-y-1 items-center">
+              <span className="text-[11px] text-fg-3 uppercase tracking-wider">Ground truth</span>
+              <Checkbox checked={showGtLigand} onChange={setShowGtLigand} label="ligand" dot="#2f9e6b" />
+              <Checkbox checked={showGtReceptor} onChange={setShowGtReceptor} label="receptor" dot="#d9d9de" />
+              <span className="text-[11px] text-fg-3 uppercase tracking-wider">Predicted</span>
+              <Checkbox checked={showPredLigand} onChange={setShowPredLigand} label="ligand" dot={color} />
+              <Checkbox checked={showPredReceptor} onChange={setShowPredReceptor} label="receptor" dot={color} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <Checkbox checked={showPocket} onChange={setShowPocket} label="pocket residues" />
+              <Checkbox checked={showViolations} onChange={setShowViolations} label="violations" />
+            </div>
+            <span className="flex items-center gap-2 text-[12px] text-fg-2">
+              trajectory
+              <Select<TrajMode>
+                value={trajectoryMode}
+                onChange={setTrajectoryMode}
+                width={150}
+                options={[{ value: 'off', label: 'off' }, { value: 'ligand', label: 'ligand only' }, ...(hasPocketTraj ? [{ value: 'pocket' as TrajMode, label: 'ligand + pocket' }] : [])]}
+              />
+            </span>
+            <button className="btn ml-auto" style={{ border: 'none' }} onClick={() => viewer.current?.zoomToLigand()}><Focus size={13} /> ligand</button>
           </div>
           {trajectoryMode !== 'off' && activeRun && (
             <div className="border-t hairline px-4 py-3 grid gap-3 md:grid-cols-[auto_1fr_auto] items-center">
@@ -227,10 +251,11 @@ export default function SystemView() {
                 {detail.minimisation ? (
                   <>
                     <div className="grid grid-cols-3 gap-3 mt-2">
-                      <Metric label="local strain" value={`${fmt(detail.minimisation.strain_local, 1)}`} sub="kcal/mol to nearest min" />
-                      <Metric label="global strain" value={`${fmt(detail.minimisation.strain_global, 1)}`} sub="kcal/mol to best conf" />
+                      <Metric label="local strain" value={`${fmt(detail.minimisation.strain_local, 1)}`} sub="kcal/mol to nearest min · lower is better" />
+                      <Metric label="global strain" value={`${fmt(detail.minimisation.strain_global, 1)}`} sub="kcal/mol to best conf · lower is better" />
                       <Metric label="drift" value={`${fmt(detail.minimisation.rmsd_drift)} Å`} sub={`max atom ${fmt(detail.minimisation.max_atom_displacement)} Å`} />
                     </div>
+                    <div className="text-[11px] text-fg-3 mt-2">Strain: energy the pose must release to reach a minimum; lower is better.</div>
                     <div className="mt-2 -mx-2"><Plot data={energyPlot} height={150} layout={{ margin: { l: 40, r: 8, t: 24, b: 28 }, yaxis: { title: { text: 'kcal/mol above min' } }, xaxis: { title: { text: 'frame' } }, legend: { orientation: 'h', y: 1.3, x: 0 } }} /></div>
                   </>
                 ) : <div className="text-fg-3 mt-2">not available</div>}
@@ -254,7 +279,7 @@ export default function SystemView() {
                 </div>
               </div>
 
-              {detail.diagnostics && <DiagnosticsPanel d={detail.diagnostics} onHover={setHighlight} />}
+              {detail.diagnostics && <DiagnosticsPanel d={detail.diagnostics} onHover={setHighlight} hoveredAtom={hoveredAtom?.index ?? null} />}
             </>
           )}
         </div>
@@ -282,10 +307,11 @@ function PocketCard({ pocket, gt, plot, showPlot }: { pocket: PocketMinimisation
             <span className={`chip ${pocket!.clashes_pose > 0 ? 'chip-bad' : 'chip-muted'}`}>{pocket!.clashes_pose} clash{pocket!.clashes_pose === 1 ? '' : 'es'} → {pocket!.clashes_min} after relaxation</span>
           </div>
           <div className="grid grid-cols-3 gap-3 mt-3">
-            <Metric label="interaction E" value={`${fmt(pocket!.e_interaction_pose, 1)} → ${fmt(pocket!.e_interaction_min, 1)}`} sub="kcal/mol pose → min" good={clashing ? false : undefined} />
+            <Metric label="interaction E" value={`${fmt(pocket!.e_interaction_pose, 1)} → ${fmt(pocket!.e_interaction_min, 1)}`} sub="kcal/mol pose → min · lower is better" good={clashing ? false : undefined} />
             <Metric label="ligand drift" value={`${fmt(pocket!.ligand_rmsd_drift)} Å`} sub={`max atom ${fmt(Math.max(0, ...pocket!.ligand_atom_displacement))} Å`} />
             <Metric label="pocket RMSD" value={`${fmt(pocket!.pocket_heavy_rmsd)} Å`} sub={`${pocket!.n_pocket_residues} residues · max ${fmt(pocket!.max_pocket_atom_displacement)} Å`} />
           </div>
+          <div className="text-[11px] text-fg-3 mt-2">Interaction energy: lower is better; &gt; 0 means the pose is repulsive (clashing) with the pocket.</div>
           {showPlot && (
             <div className="mt-2 -mx-2"><Plot data={plot} height={150} layout={{ margin: { l: 40, r: 8, t: 24, b: 28 }, yaxis: { title: { text: 'kcal/mol above min' } }, xaxis: { title: { text: 'frame' } }, legend: { orientation: 'h', y: 1.3, x: 0 } }} /></div>
           )}
@@ -295,8 +321,16 @@ function PocketCard({ pocket, gt, plot, showPlot }: { pocket: PocketMinimisation
   )
 }
 
-function DiagnosticsPanel({ d, onHover }: { d: NonNullable<MethodDetail['diagnostics']>; onHover: (atoms: number[] | null) => void }) {
+function DiagnosticsPanel({ d, onHover, hoveredAtom }: { d: NonNullable<MethodDetail['diagnostics']>; onHover: (atoms: number[] | null) => void; hoveredAtom: number | null }) {
   const s = d.summary
+  const panel = useRef<HTMLDivElement>(null)
+  // reverse hover: scroll the first sidebar entry containing the hovered viewer atom into view
+  useEffect(() => {
+    if (hoveredAtom == null || !panel.current) return
+    const first = panel.current.querySelector<HTMLElement>('[data-hit="true"]')
+    first?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [hoveredAtom])
+  const hit = (atoms: number[]) => hoveredAtom != null && atoms.includes(hoveredAtom)
   const items: { label: string; count: number; atoms: number[][]; detail: (i: number) => string }[] = [
     { label: 'bond lengths off', count: s.bad_bonds, atoms: d.bonds.filter((b) => b.flag).map((b) => b.atoms), detail: (i) => { const b = d.bonds.filter((x) => x.flag)[i]; return `${b.pred} Å vs ${b.ref} Å in crystal (×${b.ratio})` } },
     { label: 'bond angles off', count: s.bad_angles, atoms: d.angles.map((a) => a.atoms), detail: (i) => `${d.angles[i].pred}° vs ${d.angles[i].ref}° (${d.angles[i].dev > 0 ? '+' : ''}${d.angles[i].dev}°)` },
@@ -307,12 +341,12 @@ function DiagnosticsPanel({ d, onHover }: { d: NonNullable<MethodDetail['diagnos
   ]
   const total = items.reduce((a, b) => a + b.count, 0)
   return (
-    <div className="card px-4 py-3">
+    <div className="card px-4 py-3" ref={panel}>
       <div className="flex items-center justify-between">
         <Label>Where it goes wrong</Label>
         <span className={`chip ${total ? 'chip-warn' : 'chip-ok'}`}>{total ? `${d.flagged_atoms.length} atoms flagged` : 'clean geometry'}</span>
       </div>
-      <div className="text-[11px] text-fg-3 mt-1">Hover an item to highlight the atoms in the viewer. Bond/angle deviations are measured against the crystal pose of the same ligand.</div>
+      <div className="text-[11px] text-fg-3 mt-1">Hover an item to highlight its atoms in the viewer, or hover a ligand atom in the viewer to find it here. Bond/angle deviations are measured against the crystal pose of the same ligand.</div>
       <div className="mt-2 flex flex-col">
         {items.map((it) => (
           <div key={it.label}>
@@ -323,7 +357,7 @@ function DiagnosticsPanel({ d, onHover }: { d: NonNullable<MethodDetail['diagnos
             {it.count > 0 && (
               <div className="pl-3 pb-1 flex flex-col gap-0.5">
                 {it.atoms.slice(0, 8).map((atoms, i) => (
-                  <div key={i} className="text-[11px] text-fg-2 mono cursor-default hover:text-accent" onMouseEnter={() => onHover(atoms)} onMouseLeave={() => onHover(null)}>
+                  <div key={i} data-hit={hit(atoms) ? 'true' : undefined} className={`text-[11px] mono cursor-default hover:text-accent rounded px-1 -mx-1 ${hit(atoms) ? 'bg-warn-2 text-fg' : 'text-fg-2'}`} onMouseEnter={() => onHover(atoms)} onMouseLeave={() => onHover(null)}>
                     atoms {atoms.map((a) => a + 1).join('–')} · {it.detail(i)}
                   </div>
                 ))}

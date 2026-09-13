@@ -23,6 +23,7 @@ MANIFEST = HERE / "raw" / "prediction_files_manifest.txt"
 
 subset = json.load(open(HERE / "subset.json"))
 WANTED = set(subset["systems"])
+WANTED_METHODS = {"af3", "boltz", "boltz1x"}  # only these method dirs are extracted
 
 
 def fetch(start, end):
@@ -99,6 +100,7 @@ def main():
     buffered = io.BufferedReader(stream, buffer_size=8 * 1024 * 1024)
     tar = tarfile.open(fileobj=buffered, mode="r|gz")
     n_ok = 0
+    seen_wanted, seen_other = set(), set()
     t0 = time.time()
     last_log = 0
     with open(MANIFEST, "w") as man:
@@ -112,6 +114,15 @@ def main():
                 continue
             rel = parts[1]
             segs = rel.split("/")
+            if segs and segs[0] not in WANTED_METHODS:
+                seen_other.add(segs[0])
+                # tar is grouped by method: once every wanted dir has been passed, stop streaming
+                if WANTED_METHODS <= seen_wanted:
+                    log(f"all wanted method dirs done; stopping at {segs[0]}")
+                    break
+                continue
+            if segs:
+                seen_wanted.add(segs[0])
             if len(segs) < 3 or segs[1] not in WANTED:
                 continue
             dest = OUT / rel

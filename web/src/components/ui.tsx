@@ -4,6 +4,7 @@ import * as RSwitch from '@radix-ui/react-switch'
 import * as RTooltip from '@radix-ui/react-tooltip'
 import { Check, ChevronDown } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { DOCKING_BADGE, DOCKING_NOTE_DEFAULT, isDocking, type MethodInfo } from '../lib/api'
 
 export function Slider({ value, onChange, min = 0, max = 100, step = 1 }: { value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number }) {
   return (
@@ -50,6 +51,16 @@ export function Switch({ checked, onChange, label }: { checked: boolean; onChang
   )
 }
 
+export function Checkbox({ checked, onChange, label, dot }: { checked: boolean; onChange: (v: boolean) => void; label: ReactNode; dot?: string }) {
+  return (
+    <label className="inline-flex items-center gap-1.5 cursor-pointer select-none text-[12px] text-fg-2 whitespace-nowrap">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="w-3.5 h-3.5 rounded-[3px] border border-line-2 accent-[#5e6ad2] cursor-pointer" />
+      {dot && <span className="w-2 h-2 rounded-full inline-block" style={{ background: dot }} />}
+      {label}
+    </label>
+  )
+}
+
 export function Tip({ children, content }: { children: ReactNode; content: ReactNode }) {
   return (
     <RTooltip.Root>
@@ -58,6 +69,16 @@ export function Tip({ children, content }: { children: ReactNode; content: React
         <RTooltip.Content className="tooltip" sideOffset={6}>{content}</RTooltip.Content>
       </RTooltip.Portal>
     </RTooltip.Root>
+  )
+}
+
+/** Small warn-style badge marking a docking baseline; full note in the tooltip. Renders nothing for co-folding methods. */
+export function MethodBadge({ method, className = '' }: { method: MethodInfo | undefined | null; className?: string }) {
+  if (!isDocking(method)) return null
+  return (
+    <Tip content={method!.note ?? DOCKING_NOTE_DEFAULT}>
+      <span className={`chip chip-warn ${className}`} style={{ height: 16, fontSize: 10, padding: '0 5px', textTransform: 'none', letterSpacing: 0, fontWeight: 500 }}>{DOCKING_BADGE}</span>
+    </Tip>
   )
 }
 

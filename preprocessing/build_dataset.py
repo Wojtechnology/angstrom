@@ -28,6 +28,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from rdkit import Chem, RDLogger
+from rdkit.Chem import AllChem
 
 import structure_tools as st
 
@@ -46,15 +47,21 @@ DEFAULT_CUTOFF = "2021-09-30"
 
 METHODS = [
     # id, display name, training cutoff, colour, dir name in prediction_files, predictions csv name
-    {"id": "af3", "name": "AF3", "training_cutoff": "2021-09-30", "color": "#5e6ad2", "dir": "af3", "csv": "af3"},
-    {"id": "af3_no_template", "name": "AF3 (no templates)", "training_cutoff": "2021-09-30", "color": "#9aa3e6", "dir": "af3_no_template", "csv": "af3_no_template"},
-    {"id": "boltz", "name": "Boltz-1", "training_cutoff": "2021-09-30", "color": "#d98c1c", "dir": "boltz", "csv": "boltz"},
-    {"id": "boltz1x", "name": "Boltz-1x", "training_cutoff": "2021-09-30", "color": "#e8b45a", "dir": "boltz1x", "csv": "boltz1x"},
-    {"id": "boltz2", "name": "Boltz-2", "training_cutoff": "2023-06-01", "color": "#b8651b", "dir": "boltz2", "csv": "boltz2"},
-    {"id": "chai", "name": "Chai-1", "training_cutoff": "2021-09-30", "color": "#2f9e9e", "dir": "chai", "csv": "chai"},
-    {"id": "protenix", "name": "Protenix", "training_cutoff": "2021-09-30", "color": "#c04a8a", "dir": "protenix", "csv": "protenix"},
-    {"id": "rfaa", "name": "RFAA", "training_cutoff": "2021-09-30", "color": "#7a7a85", "dir": "rfaa", "csv": "rfaa"},
+    {"id": "af3", "name": "AF3", "kind": "cofolding", "training_cutoff": "2021-09-30", "color": "#5e6ad2", "dir": "af3", "csv": "af3", "note": None},
+    {"id": "boltz", "name": "Boltz-1", "kind": "cofolding", "training_cutoff": "2021-09-30", "color": "#d98c1c", "dir": "boltz", "csv": "boltz", "note": None},
+    {"id": "boltz1x", "name": "Boltz-1x", "kind": "cofolding", "training_cutoff": "2021-09-30", "color": "#e8b45a", "dir": "boltz1x", "csv": "boltz1x", "note": None},
+    {"id": "vina", "name": "Vina (rigid holo redocking)", "kind": "docking", "training_cutoff": None, "color": "#7a7a85", "dir": None, "csv": None,
+     "note": "Rigid receptor, ligand redocked into the crystal (holo) pocket — an easier problem than co-folding."},
 ]
+# Other Runs N' Poses methods are available in the raw data but are not part of the demo:
+EXTRA_METHODS = [
+    {"id": "af3_no_template", "name": "AF3 (no templates)", "kind": "cofolding", "training_cutoff": "2021-09-30", "color": "#9aa3e6", "dir": "af3_no_template", "csv": "af3_no_template", "note": None},
+    {"id": "boltz2", "name": "Boltz-2", "kind": "cofolding", "training_cutoff": "2023-06-01", "color": "#b8651b", "dir": "boltz2", "csv": "boltz2", "note": None},
+    {"id": "chai", "name": "Chai-1", "kind": "cofolding", "training_cutoff": "2021-09-30", "color": "#2f9e9e", "dir": "chai", "csv": "chai", "note": None},
+    {"id": "protenix", "name": "Protenix", "kind": "cofolding", "training_cutoff": "2021-09-30", "color": "#c04a8a", "dir": "protenix", "csv": "protenix", "note": None},
+    {"id": "rfaa", "name": "RFAA", "kind": "cofolding", "training_cutoff": "2021-09-30", "color": "#7a7a85", "dir": "rfaa", "csv": "rfaa", "note": None},
+]
+DOCKED = RAW / "docked"
 PB_EXCLUDE = {"rmsd_≤_2å", "file", "molecule", "position"}
 
 
@@ -64,6 +71,8 @@ def load_inputs():
     ann = ann[ann["ligand_is_proper"] == True]  # noqa: E712
     preds = {}
     for m in METHODS:
+        if not m["csv"]:
+            continue
         p = RAW / "predictions" / "predictions" / f"{m['csv']}.csv"
         if p.exists():
             df = pd.read_csv(p, low_memory=False)
@@ -243,14 +252,31 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
             if row is None:
                 raise RuntimeError("no prediction rows")
             seed, sample = row.get("seed", ""), row.get("sample", "")
-            path = find_model_file(m, system_id, seed, sample)
-            if path is None:
-                raise RuntimeError(f"model file not found for seed={seed} sample={sample}")
-            pred_rec = st.Receptor.from_file(path)
-            sup = st.superpose_on_pocket(pred_rec, gt_rec, gt_xyz)
-            chain = ligand_chain_in_model(row, path, gt_mol, meta["n_protein_chains"])
-            lig = st.ligand_from_structure(path, chain, gt_mol)
-            st.transform_mol(lig, sup["R"], sup["t"])
+            if m["kind"] == "docking":
+                # docked into the crystal receptor: pose is already in the ground-truth frame
+                path = DOCKED / mid / system_id / "pose.sdf"
+                if not path.exists():
+                    raise RuntimeError("docked pose not found")
+                lig = Chem.MolFromMolFile(str(path), removeHs=False)
+                if lig is None:
+                    raise RuntimeError("docked pose SDF unreadable")
+                lig = Chem.RemoveHs(lig)
+                tmpl = Chem.RemoveHs(gt_mol)
+                if lig.GetNumAtoms() != tmpl.GetNumAtoms():
+                    raise RuntimeError(f"atom count mismatch docked={lig.GetNumAtoms()} crystal={tmpl.GetNumAtoms()}")
+                lig = AllChem.AssignBondOrdersFromTemplate(tmpl, lig)
+                Chem.AssignStereochemistryFrom3D(lig)
+                pred_rec = gt_rec
+                sup = {"pocket_ca_rmsd": 0.0, "global_ca_rmsd_pocket_aligned": 0.0, "n_pocket_ca": 0, "chain_map": {}}
+            else:
+                path = find_model_file(m, system_id, seed, sample)
+                if path is None:
+                    raise RuntimeError(f"model file not found for seed={seed} sample={sample}")
+                pred_rec = st.Receptor.from_file(path)
+                sup = st.superpose_on_pocket(pred_rec, gt_rec, gt_xyz)
+                chain = ligand_chain_in_model(row, path, gt_mol, meta["n_protein_chains"])
+                lig = st.ligand_from_structure(path, chain, gt_mol)
+                st.transform_mol(lig, sup["R"], sup["t"])
             rmsd = st.symmetry_rmsd(lig, gt_mol)
             prot_atoms = list(pred_rec.heavy_atoms())
             diag = st.ligand_diagnostics(lig, gt_mol, prot_atoms)
@@ -284,7 +310,8 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
                 "pocket_minimisation": pocket_min,
                 "files": {"receptor": f"{mid}_receptor.pdb", "ligand": f"{mid}_ligand.sdf", "traj": f"{mid}_traj.sdf",
                           "pocket_traj": f"{mid}_pocket_traj.sdf", "pocket_traj_pdb": f"{mid}_pocket_traj.pdb"},
-                "model_file": str(path.relative_to(PRED_ROOT)),
+                "model_file": str(path.relative_to(RAW)),
+                "vina_score": _f(row.get("vina_score")), "pose_scores": row.get("pose_scores"),
             }
         except Exception as e:  # noqa
             res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
@@ -341,6 +368,12 @@ def main():
         rows_by_system[sid] = {m["id"]: (None if m["id"] not in preds else top_ranked(preds[m["id"]], sid, a["ligand_instance_chain"]))
                                for m in method_list}
         rows_by_system[sid] = {k: (None if v is None else v.to_dict()) for k, v in rows_by_system[sid].items()}
+        for m in method_list:
+            if m["kind"] == "docking":
+                rp = DOCKED / m["id"] / sid / "result.json"
+                r = json.loads(rp.read_text()) if rp.exists() else None
+                rows_by_system[sid][m["id"]] = ({"seed": m["id"], "sample": "0", "ranking_score": r["vina_score"], "vina_score": r["vina_score"],
+                                                "pose_scores": r["pose_scores"]} if r and r.get("ok") else None)
 
     OUT.mkdir(parents=True, exist_ok=True)
     if not args.index_only:
@@ -382,10 +415,11 @@ def main():
                 "protein_clashes": r["diagnostics"]["summary"]["protein_clashes"], "flagged_atoms": len(r["diagnostics"]["flagged_atoms"]),
                 "e_interaction_pose": pm.get("e_interaction_pose"), "e_interaction_min": pm.get("e_interaction_min"),
                 "pocket_ligand_drift": pm.get("ligand_rmsd_drift"), "clashes_pose": pm.get("clashes_pose"), "clashes_min": pm.get("clashes_min"),
+                "vina_score": r.get("vina_score"),
             })
     index = {
         "generated": time.strftime("%Y-%m-%d %H:%M"),
-        "methods": [{k: m[k] for k in ("id", "name", "training_cutoff", "color")} for m in METHODS
+        "methods": [{k: m[k] for k in ("id", "name", "kind", "training_cutoff", "color", "note")} for m in METHODS
                     if any(r["method"] == m["id"] and r["ok"] for r in results)],
         "cutoffs": CUTOFFS, "default_cutoff": DEFAULT_CUTOFF, "buckets": subset["buckets"],
         "systems": sys_rows, "results": results,

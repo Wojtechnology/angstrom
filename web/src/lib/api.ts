@@ -5,7 +5,21 @@ export interface MethodInfo {
   name: string
   training_cutoff: string
   color: string
+  /** co-folding model (default) or a docking baseline that is given the experimental receptor */
+  kind?: 'cofolding' | 'docking'
+  /** free-text caveat shown in tooltips for baselines */
+  note?: string
 }
+
+export const isDocking = (m: MethodInfo | undefined | null) => m?.kind === 'docking'
+export const DOCKING_BADGE = 'rigid holo redocking'
+export const DOCKING_NOTE_DEFAULT = 'Rigid receptor, ligand redocked into the crystal (holo) pocket — an easier problem than co-folding.'
+/** Name without a trailing parenthetical, e.g. "Vina (rigid holo redocking)" -> "Vina". */
+export const methodShortName = (m: MethodInfo) => m.name.replace(/\s*\(.*\)\s*$/, '')
+/** Short display name for tiles: "Vina · rigid redocking baseline" for docking rows. */
+export const methodTileLabel = (m: MethodInfo) => (isDocking(m) ? `${methodShortName(m)} · rigid redocking baseline` : m.name)
+/** Legend name for plots. */
+export const methodPlotName = (m: MethodInfo) => (isDocking(m) ? `${methodShortName(m)} (${DOCKING_BADGE} baseline)` : m.name)
 
 export interface SystemSummary {
   system_id: string

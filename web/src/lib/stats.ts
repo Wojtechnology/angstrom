@@ -53,9 +53,9 @@ export const METRICS: MetricDef[] = [
   { value: 'success', label: `RMSD ≤ ${RMSD_SUCCESS} Å (success rate)`, short: `% RMSD ≤ ${RMSD_SUCCESS} Å`, kind: 'rate', unit: '%', of: (r) => r.rmsd ?? null, ok: (r) => r.rmsd != null && r.rmsd <= RMSD_SUCCESS },
   { value: 'pb_valid', label: 'PoseBusters valid (rate)', short: '% PoseBusters valid', kind: 'rate', unit: '%', of: (r) => (r.pb_pass == null ? null : r.pb_pass ? 1 : 0), ok: (r) => r.pb_pass === true },
   { value: 'clash_free', label: 'Clash-free at pose (rate)', short: '% clash-free at pose', kind: 'rate', unit: '%', of: (r) => (r.clashes_pose == null ? null : r.clashes_pose === 0 ? 1 : 0), ok: (r) => r.clashes_pose === 0 },
-  { value: 'e_int_pose', label: 'Median interaction energy at pose (kcal/mol)', short: 'median E_int at pose (kcal/mol)', kind: 'median', unit: 'kcal/mol', of: (r) => r.e_interaction_pose ?? null },
-  { value: 'relax_de', label: 'Median relaxation ΔE (pose − min)', short: 'median relaxation ΔE (kcal/mol)', kind: 'median', unit: 'kcal/mol', of: (r) => (r.e_interaction_pose != null && r.e_interaction_min != null ? r.e_interaction_pose - r.e_interaction_min : null) },
-  { value: 'strain_local', label: 'Median ligand strain, local (kcal/mol)', short: 'median local strain (kcal/mol)', kind: 'median', unit: 'kcal/mol', of: (r) => r.strain_local ?? null },
+  { value: 'e_int_pose', label: 'Median interaction energy at pose (kcal/mol, lower is better)', short: 'median E_int at pose (kcal/mol, lower is better)', kind: 'median', unit: 'kcal/mol', of: (r) => r.e_interaction_pose ?? null },
+  { value: 'relax_de', label: 'Median relaxation ΔE, pose − min (lower is better)', short: 'median relaxation ΔE (kcal/mol, lower is better)', kind: 'median', unit: 'kcal/mol', of: (r) => (r.e_interaction_pose != null && r.e_interaction_min != null ? r.e_interaction_pose - r.e_interaction_min : null) },
+  { value: 'strain_local', label: 'Median ligand strain, local (kcal/mol, lower is better)', short: 'median local strain (kcal/mol, lower is better)', kind: 'median', unit: 'kcal/mol', of: (r) => r.strain_local ?? null },
 ]
 
 export function metricDef(key: MetricKey): MetricDef {
@@ -119,11 +119,11 @@ export interface ScatterYDef {
 
 export const SCATTER_Y: ScatterYDef[] = [
   { value: 'rmsd', label: 'Ligand RMSD (Å, log)', axisTitle: 'ligand RMSD (Å)', log: true, unit: 'Å', of: (r) => r.rmsd ?? null },
-  { value: 'e_int_pose', label: 'Interaction energy at pose', axisTitle: 'E_int at pose (kcal/mol)', log: false, unit: 'kcal/mol', of: (r) => r.e_interaction_pose ?? null },
-  { value: 'e_int_min', label: 'Interaction energy after relaxation', axisTitle: 'E_int after relaxation (kcal/mol)', log: false, unit: 'kcal/mol', of: (r) => r.e_interaction_min ?? null },
-  { value: 'relax_de', label: 'Relaxation ΔE (pose − min)', axisTitle: 'relaxation ΔE (kcal/mol)', log: false, unit: 'kcal/mol', of: (r) => (r.e_interaction_pose != null && r.e_interaction_min != null ? r.e_interaction_pose - r.e_interaction_min : null) },
-  { value: 'strain_local', label: 'Ligand strain, local', axisTitle: 'local ligand strain (kcal/mol)', log: false, unit: 'kcal/mol', of: (r) => r.strain_local ?? null },
-  { value: 'strain_global', label: 'Ligand strain, global', axisTitle: 'global ligand strain (kcal/mol)', log: false, unit: 'kcal/mol', of: (r) => r.strain_global ?? null },
+  { value: 'e_int_pose', label: 'Interaction energy at pose', axisTitle: 'E_int at pose (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', of: (r) => r.e_interaction_pose ?? null },
+  { value: 'e_int_min', label: 'Interaction energy after relaxation', axisTitle: 'E_int after relaxation (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', of: (r) => r.e_interaction_min ?? null },
+  { value: 'relax_de', label: 'Relaxation ΔE (pose − min)', axisTitle: 'relaxation ΔE (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', of: (r) => (r.e_interaction_pose != null && r.e_interaction_min != null ? r.e_interaction_pose - r.e_interaction_min : null) },
+  { value: 'strain_local', label: 'Ligand strain, local', axisTitle: 'local ligand strain (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', of: (r) => r.strain_local ?? null },
+  { value: 'strain_global', label: 'Ligand strain, global', axisTitle: 'global ligand strain (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', of: (r) => r.strain_global ?? null },
   { value: 'clashes_pose', label: 'Pocket clashes at pose', axisTitle: 'pocket clashes at pose', log: false, unit: '', of: (r) => r.clashes_pose ?? null },
   { value: 'pb_fails', label: 'PoseBusters failures', axisTitle: 'PoseBusters checks failed', log: false, unit: '', of: (r) => r.pb_fail_count ?? null },
 ]
