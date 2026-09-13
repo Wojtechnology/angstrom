@@ -72,9 +72,10 @@ def load_inputs():
     return ann, preds, sim
 
 
-def similarity_by_cutoff(sim: pd.DataFrame | None, system_id: str) -> dict:
+def similarity_by_cutoff(sim: pd.DataFrame | None, system_id: str, column: str = "sucos_shape_pocket_qcov") -> dict:
+    """Max similarity (per metric column) to any structure released before each cutoff date."""
     out = {}
-    if sim is None:
+    if sim is None or column not in sim:
         return out
     s = sim[sim["query_system"] == system_id]
     # a system's own PDB entry (and symmetry mates) is a trivial 100% hit once the cutoff passes its
@@ -82,8 +83,45 @@ def similarity_by_cutoff(sim: pd.DataFrame | None, system_id: str) -> dict:
     s = s[s["target_system"].str[:4] != system_id[:4]]
     for c in CUTOFFS:
         t = s[s["target_release_date"] < pd.Timestamp(c)]
-        out[c] = round(float(t["sucos_shape_pocket_qcov"].max()), 2) if len(t) else 0.0
+        v = float(t[column].max()) if len(t) else float("nan")
+        out[c] = 0.0 if np.isnan(v) else round(v, 2)
     return out
+
+
+def _sim_val(a, col, fallback=None):
+    v = a.get(col) if hasattr(a, "get") else a[col]
+    if v is None or pd.isna(v):
+        if fallback is not None and fallback in a and not pd.isna(a[fallback]):
+            return round(float(a[fallback]), 2)
+        return 0.0
+    return round(float(v), 2)
+
+
+def system_meta(sid: str, ann: pd.DataFrame, inputs: dict, sim: pd.DataFrame | None) -> dict:
+    a = ann[ann["system_id"] == sid].iloc[0]
+    return {
+        "system_id": sid, "pdb_id": a["entry_pdb_id"], "ligand_smiles": a["ligand_smiles"], "ccd": str(a["ligand_ccd_code"]),
+        "ligand_chain": a["ligand_instance_chain"], "n_heavy": int(a["ligand_num_heavy_atoms"]),
+        "seq_len": int(sum(len(x) for x in inputs[sid]["sequences"].values())), "n_protein_chains": int(a["num_protein_chains"]),
+        "release_date": str(a["release_date"]), "cluster": str(a["cluster"]),
+        "closest_training": {"system_id": None if pd.isna(a["target_system"]) else a["target_system"],
+                             "pdb_id": None if pd.isna(a["target_system"]) else str(a["target_system"])[:4],
+                             "release_date": None if pd.isna(a["target_release_date"]) else str(a["target_release_date"])[:10]},
+        # SuCOS-pocket (ligand shape/colour x pocket coverage): the benchmark's headline similarity
+        "similarity": _sim_val(a, "sucos_shape_pocket_qcov"),
+        "similarity_by_cutoff": similarity_by_cutoff(sim, sid, "sucos_shape_pocket_qcov"),
+        # ligand-only (Morgan Tanimoto) and pocket-only (pocket_qcov) views of the same question
+        "ligand_similarity": _sim_val(a, "morgan_tanimoto"),
+        "ligand_similarity_by_cutoff": similarity_by_cutoff(sim, sid, "morgan_tanimoto"),
+        "pocket_similarity": _sim_val(a, "pocket_qcov", fallback="pocket_qcov_alone"),
+        "pocket_similarity_by_cutoff": similarity_by_cutoff(sim, sid, "pocket_qcov"),
+        "num_training_systems_with_similar_ccds": 0 if pd.isna(a["num_training_systems_with_similar_ccds"]) else int(a["num_training_systems_with_similar_ccds"]),
+    }
+
+
+META_KEYS = ("system_id", "pdb_id", "ligand_smiles", "ccd", "ligand_chain", "n_heavy", "seq_len", "n_protein_chains", "release_date",
+             "cluster", "closest_training", "similarity", "similarity_by_cutoff", "ligand_similarity", "ligand_similarity_by_cutoff",
+             "pocket_similarity", "pocket_similarity_by_cutoff", "num_training_systems_with_similar_ccds")
 
 
 def top_ranked(df: pd.DataFrame, system_id: str, ligand_chain: str):
@@ -290,18 +328,7 @@ def main():
     metas, rows_by_system = {}, {}
     for sid in systems:
         a = ann[ann["system_id"] == sid].iloc[0]
-        s_val = a["sucos_shape_pocket_qcov"]
-        metas[sid] = {
-            "system_id": sid, "pdb_id": a["entry_pdb_id"], "ligand_smiles": a["ligand_smiles"], "ccd": str(a["ligand_ccd_code"]),
-            "ligand_chain": a["ligand_instance_chain"], "n_heavy": int(a["ligand_num_heavy_atoms"]),
-            "seq_len": int(sum(len(x) for x in inputs[sid]["sequences"].values())), "n_protein_chains": int(a["num_protein_chains"]),
-            "release_date": str(a["release_date"]), "cluster": str(a["cluster"]),
-            "closest_training": {"system_id": None if pd.isna(a["target_system"]) else a["target_system"],
-                                 "pdb_id": None if pd.isna(a["target_system"]) else str(a["target_system"])[:4],
-                                 "release_date": None if pd.isna(a["target_release_date"]) else str(a["target_release_date"])[:10]},
-            "similarity": 0.0 if pd.isna(s_val) else round(float(s_val), 2),
-            "similarity_by_cutoff": similarity_by_cutoff(sim, sid),
-        }
+        metas[sid] = system_meta(sid, ann, inputs, sim)
         rows_by_system[sid] = {m["id"]: (None if m["id"] not in preds else top_ranked(preds[m["id"]], sid, a["ligand_instance_chain"]))
                                for m in method_list}
         rows_by_system[sid] = {k: (None if v is None else v.to_dict()) for k, v in rows_by_system[sid].items()}
@@ -327,8 +354,11 @@ def main():
         if not p.exists():
             continue
         d = json.loads(p.read_text())
-        sys_rows.append({k: d[k] for k in ("system_id", "pdb_id", "ligand_smiles", "ccd", "ligand_chain", "n_heavy", "seq_len",
-                                             "n_protein_chains", "release_date", "cluster", "closest_training", "similarity", "similarity_by_cutoff")})
+        fresh = system_meta(sid, ann, inputs, sim)  # keep per-system meta in sync with the index
+        if any(d.get(k) != v for k, v in fresh.items()):
+            d.update(fresh)
+            p.write_text(json.dumps(d, separators=(",", ":")))
+        sys_rows.append({k: d[k] for k in META_KEYS})
         for mid, r in d["methods"].items():
             if not r["ok"]:
                 results.append({"system_id": sid, "method": mid, "ok": False, "error": r.get("error")})

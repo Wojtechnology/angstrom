@@ -25,19 +25,22 @@ subset = json.load(open(HERE / "subset.json"))
 WANTED = set(subset["systems"])
 
 
-def fetch(start, end, retries=8):
-    for attempt in range(retries):
+def fetch(start, end):
+    """Retry forever with capped backoff: gzip cannot be resumed mid-stream, so a Zenodo
+    outage must be waited out rather than abandoned."""
+    attempt = 0
+    while True:
         try:
-            r = requests.get(URL, headers={"Range": f"bytes={start}-{end}"}, timeout=120, stream=True)
+            r = requests.get(URL, headers={"Range": f"bytes={start}-{end}"}, timeout=180, stream=True)
             r.raise_for_status()
             data = r.content
             if len(data) != end - start + 1:
                 raise IOError(f"short read {len(data)} != {end-start+1}")
             return data
         except Exception as e:  # noqa
+            attempt += 1
             log(f"retry {attempt} for {start}-{end}: {e}")
-            time.sleep(5 * (attempt + 1))
-    raise RuntimeError("giving up")
+            time.sleep(min(120, 5 * attempt))
 
 
 def log(msg):

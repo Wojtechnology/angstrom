@@ -21,6 +21,11 @@ export interface SystemSummary {
   closest_training: { system_id: string | null; pdb_id: string | null; release_date: string | null }
   similarity: number
   similarity_by_cutoff: Record<string, number>
+  ligand_similarity?: number
+  ligand_similarity_by_cutoff?: Record<string, number>
+  pocket_similarity?: number
+  pocket_similarity_by_cutoff?: Record<string, number>
+  num_training_systems_with_similar_ccds?: number
 }
 
 export interface ResultRow {
