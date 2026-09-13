@@ -11,7 +11,7 @@ export function similarityAt(sys: SystemSummary): number {
 export const SIMILARITY_AXIS_TITLE = 'SuCOS-pocket similarity to closest training structure'
 
 // ---------------------------------------------------------------- aggregate metrics
-export type MetricKey = 'success' | 'pb_valid' | 'clash_free' | 'e_int_pose' | 'relax_de' | 'strain_local'
+export type MetricKey = 'success' | 'pb_valid' | 'clash_free' | 'relax_de' | 'strain_local'
 
 export interface MetricDef {
   value: MetricKey
@@ -29,7 +29,6 @@ export const METRICS: MetricDef[] = [
   { value: 'success', label: `RMSD ≤ ${RMSD_SUCCESS} Å (success rate)`, short: `% RMSD ≤ ${RMSD_SUCCESS} Å`, kind: 'rate', unit: '%', of: (r) => r.rmsd ?? null, ok: (r) => r.rmsd != null && r.rmsd <= RMSD_SUCCESS },
   { value: 'pb_valid', label: 'PoseBusters valid (rate)', short: '% PoseBusters valid', kind: 'rate', unit: '%', of: (r) => (r.pb_pass == null ? null : r.pb_pass ? 1 : 0), ok: (r) => r.pb_pass === true },
   { value: 'clash_free', label: 'Clash-free at pose (rate)', short: '% clash-free at pose', kind: 'rate', unit: '%', of: (r) => (r.clashes_pose == null ? null : r.clashes_pose === 0 ? 1 : 0), ok: (r) => r.clashes_pose === 0 },
-  { value: 'e_int_pose', label: 'Median interaction energy at pose (kcal/mol, lower is better)', short: 'median E_int at pose (kcal/mol, lower is better)', kind: 'median', unit: 'kcal/mol', of: (r) => r.e_interaction_pose ?? null },
   { value: 'relax_de', label: 'Median relaxation ΔE, pose − min (lower is better)', short: 'median relaxation ΔE (kcal/mol, lower is better)', kind: 'median', unit: 'kcal/mol', of: (r) => (r.e_interaction_pose != null && r.e_interaction_min != null ? r.e_interaction_pose - r.e_interaction_min : null) },
   { value: 'strain_local', label: 'Median ligand strain, local (kcal/mol, lower is better)', short: 'median local strain (kcal/mol, lower is better)', kind: 'median', unit: 'kcal/mol', of: (r) => r.strain_local ?? null },
 ]
@@ -82,7 +81,7 @@ export function formatMetric(def: MetricDef, v: number | null): string {
 }
 
 // ---------------------------------------------------------------- scatter y axes
-export type ScatterY = 'rmsd' | 'e_int_pose' | 'e_int_min' | 'relax_de' | 'strain_local' | 'strain_global' | 'clashes_pose' | 'pb_fails'
+export type ScatterY = 'rmsd' | 'relax_de' | 'strain_local' | 'strain_global' | 'clashes_pose' | 'pb_fails'
 
 export interface ScatterYDef {
   value: ScatterY
@@ -95,8 +94,6 @@ export interface ScatterYDef {
 
 export const SCATTER_Y: ScatterYDef[] = [
   { value: 'rmsd', label: 'Ligand RMSD (Å, log)', axisTitle: 'ligand RMSD (Å)', log: true, unit: 'Å', of: (r) => r.rmsd ?? null },
-  { value: 'e_int_pose', label: 'Interaction energy at pose', axisTitle: 'E_int at pose (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', of: (r) => r.e_interaction_pose ?? null },
-  { value: 'e_int_min', label: 'Interaction energy after relaxation', axisTitle: 'E_int after relaxation (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', of: (r) => r.e_interaction_min ?? null },
   { value: 'relax_de', label: 'Relaxation ΔE (pose − min)', axisTitle: 'relaxation ΔE (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', of: (r) => (r.e_interaction_pose != null && r.e_interaction_min != null ? r.e_interaction_pose - r.e_interaction_min : null) },
   { value: 'strain_local', label: 'Ligand strain, local', axisTitle: 'local ligand strain (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', of: (r) => r.strain_local ?? null },
   { value: 'strain_global', label: 'Ligand strain, global', axisTitle: 'global ligand strain (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', of: (r) => r.strain_global ?? null },

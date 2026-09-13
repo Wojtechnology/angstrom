@@ -259,7 +259,7 @@ export default function SystemView() {
                       <Metric label="drift" value={`${fmt(detail.minimisation.rmsd_drift)} Å`} sub={`max atom ${fmt(detail.minimisation.max_atom_displacement)} Å`} />
                     </div>
                     <div className="text-[11px] text-fg-3 mt-2">Strain: energy the pose must release to reach a minimum; lower is better.</div>
-                    <div className="mt-2 -mx-2"><Plot data={energyPlot} height={150} layout={{ margin: { l: 40, r: 8, t: 24, b: 28 }, yaxis: { title: { text: 'kcal/mol above min' } }, xaxis: { title: { text: 'frame' } }, legend: { orientation: 'h', y: 1.3, x: 0 } }} /></div>
+                    <div className="mt-2 -mx-2"><Plot data={energyPlot} height={150} layout={{ margin: { l: 44, r: 8, t: 24, b: 28 }, yaxis: { title: { text: 'ΔE vs. minimum (kcal/mol)' } }, xaxis: { title: { text: 'frame' } }, legend: { orientation: 'h', y: 1.3, x: 0 } }} /></div>
                   </>
                 ) : <div className="text-fg-3 mt-2">not available</div>}
               </div>
@@ -293,29 +293,32 @@ export default function SystemView() {
 function PocketCard({ pocket, gt, plot, showPlot }: { pocket: PocketMinimisation | null; gt: PocketMinimisation | null; plot: Data[]; showPlot: boolean }) {
   const ok = !!pocket?.ok
   const gtOk = !!gt?.ok
-  const clashing = ok && pocket!.e_interaction_pose > 0
+  const dE = ok ? pocket!.e_interaction_pose - pocket!.e_interaction_min : null
+  const gtDE = gtOk ? gt!.e_interaction_pose - gt!.e_interaction_min : null
+  const clashing = ok && pocket!.clashes_pose > 0
+  const strained = ok && !clashing && dE != null && dE > 50
   return (
     <div className="card px-4 py-3">
       <div className="flex items-center justify-between gap-2">
         <Label>Pocket relaxation (MMFF94s, protein pocket restrained)</Label>
-        {gtOk && <span className="chip chip-muted whitespace-nowrap" title="ground-truth complex, same protocol">GT {fmt(gt!.e_interaction_pose, 1)} → {fmt(gt!.e_interaction_min, 1)} kcal/mol</span>}
+        {gtOk && <span className="chip chip-muted whitespace-nowrap" title="ground-truth complex, same protocol">GT ΔE {fmt(gtDE, 1)} kcal/mol</span>}
       </div>
       {!ok ? (
         <div className="text-fg-3 mt-2">not available{pocket?.error ? `: ${pocket.error}` : ''}</div>
       ) : (
         <>
           <div className="flex items-center gap-2 mt-2 flex-wrap">
-            <span className={`chip ${clashing ? 'chip-bad' : 'chip-ok'}`}>{clashing ? 'clashing' : 'favourable'} interaction at pose</span>
+            <span className={`chip ${clashing ? 'chip-bad' : strained ? 'chip-warn' : 'chip-ok'}`}>{clashing ? 'clashing pose' : strained ? 'strained pose' : 'relaxed pose'}</span>
             <span className={`chip ${pocket!.clashes_pose > 0 ? 'chip-bad' : 'chip-muted'}`}>{pocket!.clashes_pose} clash{pocket!.clashes_pose === 1 ? '' : 'es'} → {pocket!.clashes_min} after relaxation</span>
           </div>
           <div className="grid grid-cols-3 gap-3 mt-3">
-            <Metric label="interaction E" value={`${fmt(pocket!.e_interaction_pose, 1)} → ${fmt(pocket!.e_interaction_min, 1)}`} sub="kcal/mol pose → min · lower is better" good={clashing ? false : undefined} />
+            <Metric label="relaxation ΔE" value={`${fmt(dE, 1)}`} sub="kcal/mol released · lower is better" good={clashing || strained ? false : undefined} />
             <Metric label="ligand drift" value={`${fmt(pocket!.ligand_rmsd_drift)} Å`} sub={`max atom ${fmt(Math.max(0, ...pocket!.ligand_atom_displacement))} Å`} />
             <Metric label="pocket RMSD" value={`${fmt(pocket!.pocket_heavy_rmsd)} Å`} sub={`${pocket!.n_pocket_residues} residues · max ${fmt(pocket!.max_pocket_atom_displacement)} Å`} />
           </div>
-          <div className="text-[11px] text-fg-3 mt-2">Interaction energy: lower is better; &gt; 0 means the pose is repulsive (clashing) with the pocket.</div>
+          <div className="text-[11px] text-fg-3 mt-2">Relaxation ΔE is the energy released when the pocket and ligand are allowed to relax; large values mean the pose was strained or clashing.</div>
           {showPlot && (
-            <div className="mt-2 -mx-2"><Plot data={plot} height={150} layout={{ margin: { l: 40, r: 8, t: 24, b: 28 }, yaxis: { title: { text: 'kcal/mol above min' } }, xaxis: { title: { text: 'frame' } }, legend: { orientation: 'h', y: 1.3, x: 0 } }} /></div>
+            <div className="mt-2 -mx-2"><Plot data={plot} height={150} layout={{ margin: { l: 44, r: 8, t: 24, b: 28 }, yaxis: { title: { text: 'ΔE vs. minimum (kcal/mol)' } }, xaxis: { title: { text: 'frame' } }, legend: { orientation: 'h', y: 1.3, x: 0 } }} /></div>
           )}
         </>
       )}
