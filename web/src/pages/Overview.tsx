@@ -4,8 +4,8 @@ import { ArrowUpRight } from 'lucide-react'
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js-basic-dist-min'
 import { fetchIndex, isDocking, methodPlotName, methodShortName, methodTileLabel, type IndexData, type SystemSummary } from '../lib/api'
 import {
-  axisAvailable, bucketLabel, bucketOf, clampOutliers, fmt, formatMetric, metricDef, methodStats, METRICS, resultFor,
-  RMSD_SUCCESS, SCATTER_Y, scatterYDef, SIM_AXES, similarityAt, type MetricKey, type ScatterY, type SimAxis,
+  bucketLabel, bucketOf, clampOutliers, fmt, formatMetric, metricDef, methodStats, METRICS, resultFor,
+  RMSD_SUCCESS, SCATTER_Y, scatterYDef, SIMILARITY_AXIS_TITLE, similarityAt, type MetricKey, type ScatterY,
 } from '../lib/stats'
 import { ErrorBox, Label, MethodBadge, Select, Spinner, Stat, Tip } from '../components/ui'
 import Plot from '../components/Plot'
@@ -17,7 +17,6 @@ export default function Overview() {
   const [error, setError] = useState<unknown>(null)
   const [cutoff, setCutoff] = useState<string>('')
   const [params, setParams] = useSearchParams()
-  const [axis, setAxis] = useState<SimAxis>('sucos')
   const [metric, setMetric] = useState<MetricKey>('success')
   const [scatterY, setScatterY] = useState<ScatterY>('rmsd')
   const [sort, setSort] = useState<SortKey>('similarity')
@@ -45,7 +44,6 @@ export default function Overview() {
     fetchIndex().then((d) => { setData(d); setCutoff(d.default_cutoff) }).catch(setError)
   }, [])
 
-  const axisDef = SIM_AXES.find((a) => a.value === axis)!
   const metricD = metricDef(metric)
   const yDef = scatterYDef(scatterY)
 
@@ -56,7 +54,7 @@ export default function Overview() {
 
   const bucketPlot = useMemo<Data[]>(() => {
     if (!data || !cutoff) return []
-    const byBucket = data.buckets.map((_, bi) => systems.filter((s) => bucketOf(similarityAt(s, cutoff, axis), data.buckets) === bi))
+    const byBucket = data.buckets.map((_, bi) => systems.filter((s) => bucketOf(similarityAt(s, cutoff), data.buckets) === bi))
     return methods.map((m) => {
       const st = byBucket.map((inBucket) => methodStats(data, inBucket, m.id, metric))
       const ys = st.map((x) => (x.value == null ? null : metricD.kind === 'rate' ? x.value * 100 : x.value))
@@ -69,7 +67,7 @@ export default function Overview() {
         : { color: m.color }
       return { type: 'bar', name: methodPlotName(m), x: data.buckets.map(bucketLabel), y: ys, marker, hovertemplate: hover, customdata: st.map((x) => x.n) } as Data
     })
-  }, [data, methods, systems, cutoff, axis, metric, metricD])
+  }, [data, methods, systems, cutoff, metric, metricD])
 
   const scatter = useMemo(() => {
     if (!data || !cutoff) return { traces: [] as Data[], cap: null as number | null, nClamped: 0 }
@@ -89,7 +87,7 @@ export default function Overview() {
       const pts = idx.map((i) => all[i])
       return {
         type: 'scatter', mode: 'markers', name: methodPlotName(m),
-        x: pts.map(({ s }) => similarityAt(s, cutoff, axis)),
+        x: pts.map(({ s }) => similarityAt(s, cutoff)),
         y: idx.map((i) => clamped.ys[i]),
         customdata: pts.map(({ s }, k) => [s.system_id, m.id, s.pdb_id.toUpperCase(), all[idx[k]].y]),
         marker: { size: isDocking(m) ? 8 : 7, color: m.color, symbol: idx.map((i) => (clamped.cap != null && all[i].y > clamped.cap ? 'triangle-up' : isDocking(m) ? 'diamond' : 'circle')), line: { width: pts.map((p) => (p.flagged ? 1.5 : 1)), color: pts.map((p) => (p.flagged ? '#d64545' : '#ffffff')) } },
@@ -97,12 +95,12 @@ export default function Overview() {
       } as Data
     })
     return { traces, cap: clamped.cap, nClamped: clamped.nClamped }
-  }, [data, methods, cutoff, axis, systems, yDef])
+  }, [data, methods, cutoff, systems, yDef])
 
   const scatterLayout = useMemo<Partial<Layout>>(() => {
     const base: Partial<Layout> = {
       margin: { l: 48, r: 12, t: 8, b: 44 }, legend: { orientation: 'h', y: -0.38, x: 0 }, hovermode: 'closest',
-      xaxis: { title: { text: `${axisDef.short} similarity at this cutoff`, standoff: 6 }, range: [-3, 103] },
+      xaxis: { title: { text: 'SuCOS-pocket similarity at this cutoff', standoff: 6 }, range: [-3, 103] },
     }
     if (yDef.log) {
       return {
@@ -118,7 +116,7 @@ export default function Overview() {
       yaxis: { title: { text: yDef.axisTitle }, autorange: true, zeroline: energy, zerolinecolor: '#8a8a95', zerolinewidth: 1, ...(energy ? {} : { dtick: 1, rangemode: 'tozero' as const }) },
       shapes: energy ? [{ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 0, y1: 0, line: { color: '#8a8a95', width: 1, dash: 'dash' } }] : [],
     }
-  }, [axisDef, yDef])
+  }, [yDef])
 
   const onPointClick = useCallback((e: PlotMouseEvent) => {
     const cd = e.points?.[0]?.customdata as unknown as [string, string, string, number] | undefined
@@ -128,17 +126,16 @@ export default function Overview() {
   const rows = useMemo(() => {
     if (!data || !cutoff) return []
     const list = [...systems]
-    if (sort === 'similarity') list.sort((a, b) => similarityAt(a, cutoff, axis) - similarityAt(b, cutoff, axis))
+    if (sort === 'similarity') list.sort((a, b) => similarityAt(a, cutoff) - similarityAt(b, cutoff))
     else if (sort === 'pdb') list.sort((a, b) => a.pdb_id.localeCompare(b.pdb_id))
     else list.sort((a, b) => (resultFor(data, a.system_id, sort)?.rmsd ?? 99) - (resultFor(data, b.system_id, sort)?.rmsd ?? 99))
     return list
-  }, [data, systems, sort, cutoff, axis])
+  }, [data, systems, sort, cutoff])
 
   if (error) return <ErrorBox error={error} />
   if (!data || !cutoff) return <Spinner label="Loading dataset" />
 
   const cutoffOptions = data.cutoffs.map((c) => ({ value: c, label: c === data.default_cutoff ? `${c} (benchmark)` : c }))
-  const axisOptions = SIM_AXES.filter((a) => axisAvailable(data, a.value)).map((a) => ({ value: a.value, label: a.label }))
   const metricOptions = METRICS.map((m) => ({ value: m.value, label: m.label }))
   const yOptions = SCATTER_Y.map((y) => ({ value: y.value, label: y.label }))
 
@@ -155,7 +152,7 @@ export default function Overview() {
         </div>
       </div>
 
-      <div className="card px-4 py-3 grid gap-4 lg:grid-cols-[1fr_auto_auto_auto] items-end">
+      <div className="card px-4 py-3 grid gap-4 lg:grid-cols-[1fr_auto_auto] items-end">
         <div className="flex flex-col gap-2 min-w-0">
           <Label>Methods</Label>
           <div className="flex flex-wrap gap-1.5">
@@ -172,10 +169,6 @@ export default function Overview() {
           </div>
         </div>
         <div className="flex flex-col gap-2">
-          <Label>Similarity axis</Label>
-          <Select value={axis} onChange={setAxis} options={axisOptions} width={230} />
-        </div>
-        <div className="flex flex-col gap-2">
           <Label>Training cutoff date</Label>
           <Select value={cutoff} onChange={setCutoff} options={cutoffOptions} width={180} />
         </div>
@@ -184,7 +177,7 @@ export default function Overview() {
           <Select value={metric} onChange={setMetric} options={metricOptions} width={250} />
         </div>
         {nHidden > 0 && (
-          <div className="text-[11px] text-fg-3 lg:col-span-4">
+          <div className="text-[11px] text-fg-3 lg:col-span-3">
             {nHidden} system{nHidden > 1 ? 's' : ''} released on or before this cutoff {nHidden > 1 ? 'are' : 'is'} hidden (they would be inside the training set).
           </div>
         )}
@@ -215,7 +208,7 @@ export default function Overview() {
             layout={{
               barmode: 'group', margin: { l: 48, r: 12, t: 8, b: 44 }, legend: { orientation: 'h', y: -0.38, x: 0 },
               yaxis: metricD.kind === 'rate' ? { title: { text: metricD.short }, range: [0, 100] } : { title: { text: metricD.short }, zeroline: true, zerolinecolor: '#8a8a95' },
-              xaxis: { title: { text: axisDef.axisTitle, standoff: 6 } },
+              xaxis: { title: { text: SIMILARITY_AXIS_TITLE, standoff: 6 } },
             }}
           />
         </div>
@@ -249,13 +242,13 @@ export default function Overview() {
               <tr>
                 <th>System</th>
                 <th>Ligand</th>
-                <th className="text-right" title={axisDef.axisTitle}>{axisDef.short}</th>
+                <th className="text-right" title={SIMILARITY_AXIS_TITLE}>Similarity</th>
                 {methods.map((m) => <th key={m.id} className="text-right"><span className="inline-flex items-center gap-1.5 justify-end">{isDocking(m) ? methodShortName(m) : m.name}<MethodBadge method={m} /></span></th>)}
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((s) => <Row key={s.system_id} s={s} data={data} methods={methods} cutoff={cutoff} axis={axis} />)}
+              {rows.map((s) => <Row key={s.system_id} s={s} data={data} methods={methods} cutoff={cutoff} />)}
             </tbody>
           </table>
         </div>
@@ -264,8 +257,8 @@ export default function Overview() {
   )
 }
 
-function Row({ s, data, methods, cutoff, axis }: { s: SystemSummary; data: IndexData; methods: IndexData['methods']; cutoff: string; axis: SimAxis }) {
-  const sim = similarityAt(s, cutoff, axis)
+function Row({ s, data, methods, cutoff }: { s: SystemSummary; data: IndexData; methods: IndexData['methods']; cutoff: string }) {
+  const sim = similarityAt(s, cutoff)
   return (
     <tr>
       <td>

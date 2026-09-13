@@ -68,6 +68,7 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
   // create viewer once
   useEffect(() => {
     if (!el.current) return
+    el.current.replaceChildren()  // StrictMode mounts twice in dev; drop any canvas left by a torn-down viewer
     let v: $3Dmol.GLViewer
     try {
       v = $3Dmol.createViewer(el.current, { backgroundColor: '#fbfbfb', antialias: true })

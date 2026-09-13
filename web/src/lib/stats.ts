@@ -2,37 +2,14 @@ import type { IndexData, ResultRow, SystemSummary } from './api'
 
 export const RMSD_SUCCESS = 2.0
 
-// ---------------------------------------------------------------- similarity axes
-export type SimAxis = 'sucos' | 'ligand' | 'pocket'
-
-export const SIM_AXES: { value: SimAxis; label: string; short: string; axisTitle: string }[] = [
-  { value: 'sucos', label: 'Pocket + ligand (SuCOS-pocket)', short: 'SuCOS-pocket', axisTitle: 'SuCOS-pocket similarity to closest training structure' },
-  { value: 'ligand', label: 'Ligand only (Morgan Tanimoto)', short: 'ligand Tanimoto', axisTitle: 'Morgan Tanimoto similarity to closest training ligand' },
-  { value: 'pocket', label: 'Protein pocket only (pocket coverage)', short: 'pocket coverage', axisTitle: 'Pocket coverage by closest training protein' },
-]
-
-/** Similarity of a system to its closest training structure released before `cutoff`, on the chosen axis (0–100). */
-export function similarityAt(sys: SystemSummary, cutoff: string, axis: SimAxis = 'sucos'): number {
-  const [base, byCutoff] =
-    axis === 'ligand' ? [sys.ligand_similarity, sys.ligand_similarity_by_cutoff]
-      : axis === 'pocket' ? [sys.pocket_similarity, sys.pocket_similarity_by_cutoff]
-        : [sys.similarity, sys.similarity_by_cutoff]
-  const v = byCutoff?.[cutoff]
-  if (v != null) return v
-  if (base != null) return base
-  // axis not available in this dataset build: fall back to the SuCOS-pocket similarity
-  return sys.similarity_by_cutoff[cutoff] ?? sys.similarity
+// ---------------------------------------------------------------- similarity
+/** SuCOS-pocket similarity of a system to its closest training structure released before `cutoff` (0–100). */
+export function similarityAt(sys: SystemSummary, cutoff: string): number {
+  const v = sys.similarity_by_cutoff[cutoff]
+  return v == null ? sys.similarity : v
 }
 
-export function axisAvailable(data: IndexData, axis: SimAxis): boolean {
-  if (axis === 'sucos') return true
-  return data.systems.some((s) => (axis === 'ligand' ? s.ligand_similarity : s.pocket_similarity) != null)
-}
-
-/** Systems whose similarity (given cutoff and axis) is <= threshold. */
-export function filterSystems(data: IndexData, cutoff: string, threshold: number, axis: SimAxis = 'sucos'): SystemSummary[] {
-  return data.systems.filter((s) => similarityAt(s, cutoff, axis) <= threshold)
-}
+export const SIMILARITY_AXIS_TITLE = 'SuCOS-pocket similarity to closest training structure'
 
 // ---------------------------------------------------------------- aggregate metrics
 export type MetricKey = 'success' | 'pb_valid' | 'clash_free' | 'e_int_pose' | 'relax_de' | 'strain_local'
