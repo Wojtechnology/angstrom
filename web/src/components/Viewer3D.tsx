@@ -31,8 +31,8 @@ export interface ViewerProps {
   diagnostics?: Diagnostics | null
   atomDisplacement?: number[] | null
   highlightAtoms?: number[] | null
-  /** clash entry hovered in the panel: drawn emphasised, others dimmed */
-  highlightClash?: ClashRef | null
+  /** clash entries to emphasise (panel hover or viewer-atom hover); everything else is dimmed */
+  highlightClash?: ClashRef | ClashRef[] | null
   /** residue label like "A:PHE46" whose side chain is drawn in the accent colour (contact chip hover) */
   highlightResidue?: string | null
   /** crystal-ligand atom indices to emphasise (lost contacts) */
@@ -62,6 +62,7 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
   const lastHover = useRef<number | null>(null)
   const cancelHover = useRef<() => void>(() => {})
   const pointerInside = useRef(false)
+  const movedSinceEnter = useRef(false)
   const [glError, setGlError] = useState<string | null>(null)
 
   useImperativeHandle(ref, () => ({
@@ -94,9 +95,10 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     ro.observe(el.current)
     const node = el.current
     const onEnter = () => { pointerInside.current = true }
+    const onMove = () => { movedSinceEnter.current = true }
     const onLeave = () => { pointerInside.current = false; cancelHover.current(); propsRef.current.onClashHover?.(null) }
-    node.addEventListener('mouseenter', onEnter); node.addEventListener('mouseleave', onLeave)
-    return () => { ro.disconnect(); node.removeEventListener('mouseenter', onEnter); node.removeEventListener('mouseleave', onLeave); v.clear(); viewer.current = null }
+    node.addEventListener('mouseenter', onEnter); node.addEventListener('mousemove', onMove); node.addEventListener('mouseleave', onLeave)
+    return () => { ro.disconnect(); node.removeEventListener('mouseenter', onEnter); node.removeEventListener('mousemove', onMove); node.removeEventListener('mouseleave', onLeave); v.clear(); viewer.current = null }
   }, [])
 
   // (re)load models when the structure strings change
@@ -129,17 +131,20 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
         // ignore hovers whose delayed timer fires after the pointer already left the canvas
         if (!pointerInside.current) return
         lastHover.current = atom.index
+        movedSinceEnter.current = false
         propsRef.current.onAtomHover?.({ index: atom.index, elem: atom.elem ?? '' })
       }
-      const leave = () => {
+      const leave = (force = false) => {
         if (lastHover.current == null) return
+        // a restyle rebuilds the geometry and makes 3Dmol report an unhover although the pointer never moved: ignore those
+        if (!force && pointerInside.current && !movedSinceEnter.current) return
         lastHover.current = null
         propsRef.current.onAtomHover?.(null)
       }
-      cancelHover.current = leave
+      cancelHover.current = () => leave(true)
       v.setHoverDuration(60)
       // re-applied after every restyle: setStyle can rebuild atom records and drop the hoverable flag
-      applyHoverable.current = () => v.setHoverable({ model: m.predLig }, true, enter, leave)
+      applyHoverable.current = () => v.setHoverable({ model: m.predLig }, true, enter, () => leave(false))
       applyHoverable.current()
     }
     if (import.meta.env.DEV) (window as unknown as { __angstromViewer?: $3Dmol.GLViewer; __angstromModels?: Models }).__angstromViewer = v
@@ -156,7 +161,6 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     const v = viewer.current
     if (!v || !models.current.gtRec) return
     styleAll(v, models.current, props)
-    applyHoverable.current()
     v.render()
   }, [props.showGtReceptor, props.showGtLigand, props.showPredLigand, props.showPredReceptor, props.showPocket, props.showViolations, props.trajectoryMode, props.diagnostics, props.highlightAtoms, props.highlightClash, props.highlightResidue, props.highlightGtAtoms, props.atomDisplacement, props.predColor])
 
@@ -269,7 +273,9 @@ function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
 
   if (p.showViolations && p.diagnostics && !showTraj) {
     const d = p.diagnostics
-    const hc = p.highlightClash ?? null
+    const hcs = p.highlightClash == null ? [] : Array.isArray(p.highlightClash) ? p.highlightClash : [p.highlightClash]
+    const hc = hcs.length ? hcs : null
+    const isHl = (kind: ClashRef['kind'], i: number) => hcs.some((c) => c.kind === kind && c.index === i)
     const hlAtoms = new Set(p.highlightAtoms ?? [])
     const dimming = hc != null || hlAtoms.size > 0  // something is emphasised: fade every other violation marker
     if (d.flagged_atoms.length) {
@@ -295,7 +301,7 @@ function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
       const ref = (m.predRec?.selectedAtoms(sel) as $3Dmol.AtomSpec[] | undefined) ?? []
       const b = ref.length ? ref[0] : ((m.gtRec?.selectedAtoms(sel) as $3Dmol.AtomSpec[] | undefined) ?? [])[0]
       if (!(a && b && a.x != null && b.x != null)) return
-      const hl = hc ? hc.kind === 'protein' && hc.index === i : hlAtoms.has(c.atom)
+      const hl = hc ? isHl('protein', i) : hlAtoms.has(c.atom)
       const atomHl = false
       const cb = hoverCbs({ kind: 'protein', index: i })
       v.addCylinder({ start: xyz(a), end: xyz(b), radius: hl ? 0.14 : 0.06, dashed: true, color: hl ? '#f2b01e' : '#d64545', alpha: dimming && !hl ? 0.2 : 1, fromCap: 1, toCap: 1, ...cb })
@@ -305,7 +311,7 @@ function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
     d.intra_clashes.forEach((c, i) => {
       const a = ligAtoms[c.atoms[0]], b = ligAtoms[c.atoms[1]]
       if (!(a && b && a.x != null && b.x != null)) return
-      const hl = hc ? hc.kind === 'intra' && hc.index === i : (hlAtoms.has(c.atoms[0]) || hlAtoms.has(c.atoms[1]))
+      const hl = hc ? isHl('intra', i) : (hlAtoms.has(c.atoms[0]) || hlAtoms.has(c.atoms[1]))
       const cb = hoverCbs({ kind: 'intra', index: i })
       v.addCylinder({ start: xyz(a), end: xyz(b), radius: hl ? 0.14 : 0.06, dashed: true, color: hl ? '#f2b01e' : '#d98c1c', alpha: dimming && !hl ? 0.2 : 1, ...cb })
       if (hl) { for (const q of [a, b]) v.addSphere({ center: xyz(q), radius: 0.7, color: '#f2b01e', alpha: 0.85 }); labelAt(a, b, `${c.dist.toFixed(2)} Å`) }
@@ -329,7 +335,7 @@ function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
     v.addStyle({ model: m.gtLig, index: p.highlightGtAtoms }, { sphere: { radius: 0.6, color: '#2f9e6b', opacity: 0.6 } })
   }
 
-  if (p.highlightAtoms && p.highlightAtoms.length && !p.highlightClash) {
+  if (p.highlightAtoms && p.highlightAtoms.length) {
     v.addStyle({ model: lig, index: p.highlightAtoms }, { sphere: { radius: 0.7, color: '#f2b01e', opacity: 0.8 } })
   }
 

@@ -25,6 +25,7 @@ export default function SystemView() {
   const [hoveredAtom, setHoveredAtom] = useState<HoveredAtom | null>(null)
   const [hoveredClash, setHoveredClash] = useState<ClashRef | null>(null)   // viewer -> panel
   const [highlightClash, setHighlightClash] = useState<ClashRef | null>(null) // panel -> viewer
+  const hoverClearTimer = useRef<number | null>(null)
   const [highlightResidue, setHighlightResidue] = useState<string | null>(null)
   const [highlightGtAtoms, setHighlightGtAtoms] = useState<number[] | null>(null)
   const [showPocket, setShowPocket] = useState(true)
@@ -81,7 +82,29 @@ export default function SystemView() {
     return () => clearInterval(t)
   }, [playing, trajectoryMode, nFrames])
   useEffect(() => { setFrame(0); setPlaying(false); setHighlight(null); setHoveredAtom(null) }, [method])
-  const onAtomHover = useCallback((a: HoveredAtom | null) => setHoveredAtom(a), [])
+  // viewer atom hover: set immediately, clear with a short debounce so moving between atoms does not flicker
+  const onAtomHover = useCallback((a: HoveredAtom | null) => {
+    if (hoverClearTimer.current) { window.clearTimeout(hoverClearTimer.current); hoverClearTimer.current = null }
+    if (a) setHoveredAtom(a)
+    else hoverClearTimer.current = window.setTimeout(() => { hoverClearTimer.current = null; setHoveredAtom(null) }, 150)
+  }, [])
+  // violations that involve the atom hovered in the viewer -> same highlight the panel hover produces
+  const viewerHighlight = useMemo(() => {
+    const d = detail?.ok ? detail.diagnostics : null
+    if (!d || hoveredAtom == null) return null
+    const i = hoveredAtom.index
+    const atoms = new Set<number>([i])
+    const clashes: ClashRef[] = []
+    for (const b of d.bonds) if (b.flag && b.atoms.includes(i)) b.atoms.forEach((x) => atoms.add(x))
+    for (const a of d.angles) if (a.atoms.includes(i)) a.atoms.forEach((x) => atoms.add(x))
+    for (const r of d.rings) if (r.flag && r.atoms.includes(i)) r.atoms.forEach((x) => atoms.add(x))
+    for (const s of d.stereo) if (s.flag && s.atom === i) atoms.add(i)
+    d.intra_clashes.forEach((c, k) => { if (c.atoms.includes(i)) { c.atoms.forEach((x) => atoms.add(x)); clashes.push({ kind: 'intra', index: k }) } })
+    d.protein_clashes.forEach((c, k) => { if (c.atom === i) clashes.push({ kind: 'protein', index: k }) })
+    return { atoms: [...atoms], clashes }
+  }, [detail, hoveredAtom])
+  const effHighlightAtoms = highlight ?? viewerHighlight?.atoms ?? null
+  const effHighlightClash: ClashRef | ClashRef[] | null = highlight ? highlightClash : (viewerHighlight?.clashes.length ? viewerHighlight.clashes : null)
   const onClashHover = useCallback((c: ClashRef | null) => setHoveredClash(c), [])
   useEffect(() => { setHighlightClash(null); setHoveredClash(null); setHighlightResidue(null); setHighlightGtAtoms(null) }, [method])
   const onContactHover = useCallback((residue: string | null, gtAtoms: number[] | null) => { setHighlightResidue(residue); setHighlightGtAtoms(gtAtoms) }, [])
@@ -182,8 +205,8 @@ export default function SystemView() {
                 frame={frame}
                 diagnostics={detail?.diagnostics}
                 atomDisplacement={trajectoryMode === 'pocket' ? pocket?.ligand_atom_displacement : detail?.minimisation?.atom_displacement}
-                highlightAtoms={highlight}
-                highlightClash={highlightClash}
+                highlightAtoms={effHighlightAtoms}
+                highlightClash={effHighlightClash}
                 highlightResidue={highlightResidue}
                 highlightGtAtoms={highlightGtAtoms}
                 onAtomHover={onAtomHover}
