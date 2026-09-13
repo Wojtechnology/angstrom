@@ -346,7 +346,7 @@ function DiagnosticsPanel({ d, onHover, hoveredAtom }: { d: NonNullable<MethodDe
     <div className="card px-4 py-3" ref={panel}>
       <div className="flex items-center justify-between">
         <Label>Physical violations</Label>
-        <span className={`chip ${total ? 'chip-warn' : 'chip-ok'}`}>{total ? `${d.flagged_atoms.length} atoms flagged` : 'clean geometry'}</span>
+        <span className={`chip ${total ? 'chip-warn' : 'chip-ok'}`}>{total ? `${d.flagged_atoms.length} atom${d.flagged_atoms.length === 1 ? "" : "s"} flagged` : 'clean geometry'}</span>
       </div>
       <div className="text-[11px] text-fg-3 mt-1">Hover an item to highlight its atoms in the viewer, or hover a ligand atom in the viewer to find it here. Bond/angle deviations are measured against the crystal pose of the same ligand.</div>
       <div className="mt-2 grid gap-x-6 md:grid-cols-2">
