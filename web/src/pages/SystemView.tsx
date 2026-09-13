@@ -101,6 +101,8 @@ export default function SystemView() {
     for (const s of d.stereo) if (s.flag && s.atom === i) atoms.add(i)
     d.intra_clashes.forEach((c, k) => { if (c.atoms.includes(i)) { c.atoms.forEach((x) => atoms.add(x)); clashes.push({ kind: 'intra', index: k }) } })
     d.protein_clashes.forEach((c, k) => { if (c.atom === i) clashes.push({ kind: 'protein', index: k }) })
+    // a clean atom (not part of any violation) produces no highlight at all
+    if (atoms.size === 1 && clashes.length === 0 && !d.flagged_atoms.includes(i)) return null
     return { atoms: [...atoms], clashes }
   }, [detail, hoveredAtom])
   const effHighlightAtoms = highlight ?? viewerHighlight?.atoms ?? null
@@ -254,7 +256,7 @@ export default function SystemView() {
             </div>
           )}
         </div>
-        {detail?.ok && detail.diagnostics && <DiagnosticsPanel d={detail.diagnostics} contacts={detail.contacts ?? null} onHover={setHighlight} onHoverClash={setHighlightClash} onHoverContact={onContactHover} hoveredAtom={highlight ? null : hoveredAtom?.index ?? null} hoveredClash={highlight ? null : hoveredClash} />}
+        {detail?.ok && detail.diagnostics && <DiagnosticsPanel d={detail.diagnostics} contacts={detail.contacts ?? null} onHover={setHighlight} onHoverClash={setHighlightClash} onHoverContact={onContactHover} hoveredAtom={highlight || !viewerHighlight ? null : hoveredAtom?.index ?? null} hoveredClash={highlight ? null : hoveredClash} />}
         </div>
 
         {/* side panel */}
