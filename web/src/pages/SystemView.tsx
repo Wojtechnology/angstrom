@@ -266,7 +266,7 @@ export default function SystemView() {
                 </div>
               </div>
 
-              <PocketCard pocket={detail.pocket_minimisation ?? null} gt={sys.gt.pocket_minimisation ?? null} plot={pocketPlot} showPlot={trajectoryMode === 'pocket'} />
+              <PocketCard pocket={detail.pocket_minimisation ?? null} gt={sys.gt.pocket_minimisation ?? null} plot={pocketPlot} showPlot={trajectoryMode === 'pocket'} excess={excessFor(index, sys.system_id, method, 'excess_relaxation_de') ?? (detail.pocket_minimisation?.ok && sys.gt.pocket_minimisation?.ok ? (detail.pocket_minimisation.e_interaction_pose - detail.pocket_minimisation.e_interaction_min) - (sys.gt.pocket_minimisation.e_interaction_pose - sys.gt.pocket_minimisation.e_interaction_min) : null)} />
 
               <div className="card px-4 py-3">
                 <div className="flex items-center justify-between">
@@ -282,7 +282,8 @@ export default function SystemView() {
                       <Metric label="global strain" value={`${fmt(detail.minimisation.strain_global, 1)}`} sub="kcal/mol to best conf · lower is better" />
                       <Metric label="drift" value={`${fmt(detail.minimisation.rmsd_drift)} Å`} sub={`max atom ${fmt(detail.minimisation.max_atom_displacement)} Å`} />
                     </div>
-                    <div className="text-[11px] text-fg-3 mt-2">Strain: energy the pose must release to reach a minimum; lower is better.</div>
+                    <div className="mt-2"><ExcessChip value={excessFor(index, sys.system_id, method, 'excess_strain_local') ?? (sys.gt.minimisation ? detail.minimisation.strain_local - sys.gt.minimisation.strain_local : null)} label="local strain, excess vs crystal" /></div>
+                    <div className="text-[11px] text-fg-3 mt-2">Strain: energy the pose must release to reach a minimum; lower is better. If the crystal pose itself is strained under this force field, the model cannot be expected to do better; the excess is the part the model added.</div>
                     <div className="mt-2 -mx-2"><Plot data={energyPlot} height={150} layout={{ margin: { l: 44, r: 8, t: 24, b: 28 }, yaxis: { title: { text: 'ΔE vs. minimum (kcal/mol)' } }, xaxis: { title: { text: 'frame' } }, legend: { orientation: 'h', y: 1.3, x: 0 } }} /></div>
                   </>
                 ) : <div className="text-fg-3 mt-2">not available</div>}
@@ -314,7 +315,20 @@ export default function SystemView() {
   )
 }
 
-function PocketCard({ pocket, gt, plot, showPlot }: { pocket: PocketMinimisation | null; gt: PocketMinimisation | null; plot: Data[]; showPlot: boolean }) {
+/** excess (prediction − crystal) value from index.json result rows when the preprocessing provides it */
+function excessFor(index: IndexData | null, systemId: string, method: string, key: 'excess_relaxation_de' | 'excess_strain_local'): number | null {
+  const r = index?.results.find((x) => x.system_id === systemId && x.method === method)
+  const v = r?.[key]
+  return v == null ? null : v
+}
+
+function ExcessChip({ value, label }: { value: number | null; label: string }) {
+  if (value == null) return null
+  const cls = value <= 5 ? 'chip-ok' : value <= 25 ? 'chip-warn' : 'chip-bad'
+  return <span className={`chip ${cls} self-start`} title="prediction − crystal pose, same force field">{label} {value >= 0 ? '+' : ''}{value.toFixed(1)} kcal/mol</span>
+}
+
+function PocketCard({ pocket, gt, plot, showPlot, excess }: { pocket: PocketMinimisation | null; gt: PocketMinimisation | null; plot: Data[]; showPlot: boolean; excess: number | null }) {
   const ok = !!pocket?.ok
   const gtOk = !!gt?.ok
   const dE = ok ? pocket!.e_interaction_pose - pocket!.e_interaction_min : null
@@ -340,7 +354,8 @@ function PocketCard({ pocket, gt, plot, showPlot }: { pocket: PocketMinimisation
             <Metric label="ligand drift" value={`${fmt(pocket!.ligand_rmsd_drift)} Å`} sub={`max atom ${fmt(Math.max(0, ...pocket!.ligand_atom_displacement))} Å`} />
             <Metric label="pocket RMSD" value={`${fmt(pocket!.pocket_heavy_rmsd)} Å`} sub={`${pocket!.n_pocket_residues} residues · max ${fmt(pocket!.max_pocket_atom_displacement)} Å`} />
           </div>
-          <div className="text-[11px] text-fg-3 mt-2">Relaxation ΔE is the energy released when the pocket and ligand are allowed to relax; large values mean the pose was strained or clashing.</div>
+          <div className="mt-2"><ExcessChip value={excess} label="relaxation ΔE, excess vs crystal" /></div>
+          <div className="text-[11px] text-fg-3 mt-2">Relaxation ΔE is the energy released when the pocket and ligand are allowed to relax; large values mean the pose was strained or clashing. If the crystal pose itself is strained under this force field, the model cannot be expected to do better; the excess is the part the model added.</div>
           {showPlot && (
             <div className="mt-2 -mx-2"><Plot data={plot} height={150} layout={{ margin: { l: 44, r: 8, t: 24, b: 28 }, yaxis: { title: { text: 'ΔE vs. minimum (kcal/mol)' } }, xaxis: { title: { text: 'frame' } }, legend: { orientation: 'h', y: 1.3, x: 0 } }} /></div>
           )}

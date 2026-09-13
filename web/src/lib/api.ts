@@ -35,6 +35,8 @@ export interface SystemSummary {
   closest_training: { system_id: string | null; pdb_id: string | null; release_date: string | null }
   similarity: number
   similarity_by_cutoff: Record<string, number>
+  gt_relaxation_de?: number | null
+  gt_strain_local?: number | null
   ligand_similarity?: number
   ligand_similarity_by_cutoff?: Record<string, number>
   pocket_similarity?: number
@@ -64,6 +66,8 @@ export interface ResultRow {
   pocket_ligand_drift?: number | null
   clashes_pose?: number | null
   clashes_min?: number | null
+  excess_relaxation_de?: number | null
+  excess_strain_local?: number | null
   contact_retention?: number | null
   shape_overlap?: number | null
   centroid_distance?: number | null

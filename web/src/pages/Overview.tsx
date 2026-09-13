@@ -108,11 +108,13 @@ export default function Overview() {
       }
     }
     const energy = yDef.unit === 'kcal/mol'
+    const excess = yDef.value === 'excess_relax_de' || yDef.value === 'excess_strain_local'
     const fraction = yDef.value === 'contact_retention' || yDef.value === 'shape_overlap'
     return {
       ...base,
       yaxis: { title: { text: yDef.axisTitle }, autorange: !fraction, ...(fraction ? { range: [-0.03, 1.03], dtick: 0.2 } : {}), zeroline: energy, zerolinecolor: '#8a8a95', zerolinewidth: 1, ...(energy || fraction ? {} : { dtick: 1, rangemode: 'tozero' as const }) },
       shapes: energy ? [{ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 0, y1: 0, line: { color: '#8a8a95', width: 1, dash: 'dash' } }] : [],
+      annotations: excess ? [{ xref: 'paper', x: 1, y: 0, xanchor: 'right', yanchor: 'bottom', text: 'crystal pose', showarrow: false, font: { size: 10, color: '#8a8a95' } }] : [],
     }
   }, [yDef])
 

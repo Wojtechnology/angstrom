@@ -187,12 +187,34 @@ def poses_to_mols(poses_pdbqt: str, template: Chem.Mol):
 
 # --------------------------------------------------------------------------- per system
 def dock_system(args):
+    """Pool task: run one system in a child process so a Vina abort() cannot hang the pool.
+    Retries with a larger box, which works around Vina's szv_grid assertion on extended ligands."""
+    import subprocess
     sid, lig_chain, exhaustiveness, n_poses, overwrite = args
-    t0 = time.time()
     d = OUT / sid
     res_path = d / "result.json"
     if res_path.exists() and not overwrite:
         return {"system_id": sid, "ok": True, "cached": True}
+    d.mkdir(parents=True, exist_ok=True)
+    last = None
+    for padding in (8.0, 12.0, 16.0):
+        cmd = [sys.executable, __file__, "--single", sid, lig_chain, str(exhaustiveness), str(n_poses), str(padding)]
+        try:
+            pr = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        except subprocess.TimeoutExpired:
+            last = {"system_id": sid, "ok": False, "error": f"timeout after 1800 s (padding {padding})"}
+            continue
+        if pr.returncode == 0 and res_path.exists():
+            return json.loads(res_path.read_text())
+        last = {"system_id": sid, "ok": False, "error": f"vina child exit {pr.returncode} (padding {padding}): {(pr.stderr or pr.stdout).strip()[-200:]}"}
+    res_path.write_text(json.dumps(last, indent=1))
+    return last
+
+
+def dock_single(sid, lig_chain, exhaustiveness, n_poses, padding=8.0):
+    t0 = time.time()
+    d = OUT / sid
+    res_path = d / "result.json"
     d.mkdir(parents=True, exist_ok=True)
     try:
         from vina import Vina
@@ -206,7 +228,7 @@ def dock_system(args):
         xyz = Chem.RemoveHs(gt).GetConformer().GetPositions()
         center = xyz.mean(0)
         extent = xyz.max(0) - xyz.min(0)
-        size = np.maximum(extent + 16.0, 20.0)  # ligand extent + 8 Å each side, min 20 Å
+        size = np.maximum(extent + 2 * padding, 20.0)  # ligand extent + padding each side, min 20 Å
         v = Vina(sf_name="vina", seed=0, cpu=1, verbosity=0)
         v.set_receptor(rigid_pdbqt_filename=str(rec_file))
         v.set_ligand_from_string(lig_pdbqt)
@@ -226,7 +248,7 @@ def dock_system(args):
         w.close()
         result = {"system_id": sid, "ok": True, "vina_score": float(energies[0][0]),
                   "pose_scores": [float(e[0]) for e in energies], "box_center": center.round(3).tolist(),
-                  "box_size": size.round(1).tolist(), "exhaustiveness": exhaustiveness, "n_receptor_atoms": rec_pdbqt.count("\n"),
+                  "box_size": size.round(1).tolist(), "box_padding": padding, "exhaustiveness": exhaustiveness, "n_receptor_atoms": rec_pdbqt.count("\n"),
                   "elapsed": round(time.time() - t0, 1)}
     except Exception as e:  # noqa
         result = {"system_id": sid, "ok": False, "error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-600:],
@@ -236,6 +258,10 @@ def dock_system(args):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--single":
+        sid, chain, ex, npz, pad = sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), float(sys.argv[6])
+        r = dock_single(sid, chain, ex, npz, pad)
+        sys.exit(0 if r["ok"] else 1)
     ap = argparse.ArgumentParser()
     ap.add_argument("--systems", nargs="*")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 1))

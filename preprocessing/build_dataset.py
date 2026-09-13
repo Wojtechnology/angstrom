@@ -404,7 +404,11 @@ def main():
         if any(d.get(k) != v for k, v in fresh.items()):
             d.update(fresh)
             p.write_text(json.dumps(d, separators=(",", ":")))
-        sys_rows.append({k: d[k] for k in META_KEYS})
+        gpm = (d.get("gt") or {}).get("pocket_minimisation") or {}
+        gt_relax = (round(gpm["e_interaction_pose"] - gpm["e_interaction_min"], 2)
+                    if gpm.get("e_interaction_pose") is not None and gpm.get("e_interaction_min") is not None else None)
+        gt_strain = ((d.get("gt") or {}).get("minimisation") or {}).get("strain_local")
+        sys_rows.append({**{k: d[k] for k in META_KEYS}, "gt_relaxation_de": gt_relax, "gt_strain_local": gt_strain})
         for mid, r in d["methods"].items():
             if not r["ok"]:
                 results.append({"system_id": sid, "method": mid, "ok": False, "error": r.get("error")})
@@ -420,6 +424,10 @@ def main():
                 "e_interaction_pose": pm.get("e_interaction_pose"), "e_interaction_min": pm.get("e_interaction_min"),
                 "pocket_ligand_drift": pm.get("ligand_rmsd_drift"), "clashes_pose": pm.get("clashes_pose"), "clashes_min": pm.get("clashes_min"),
                 "vina_score": r.get("vina_score"),
+                # excess energies relative to the crystal pose of the same system (prediction − crystal)
+                "excess_relaxation_de": (round(pm["e_interaction_pose"] - pm["e_interaction_min"] - gt_relax, 2)
+                                         if gt_relax is not None and pm.get("e_interaction_pose") is not None and pm.get("e_interaction_min") is not None else None),
+                "excess_strain_local": (round(mn["strain_local"] - gt_strain, 2) if gt_strain is not None and mn.get("strain_local") is not None else None),
                 "contact_retention": (r.get("contacts") or {}).get("retention"),
                 "shape_overlap": (r.get("pocket_hit") or {}).get("shape_overlap"),
                 "centroid_distance": (r.get("pocket_hit") or {}).get("centroid_distance"),
