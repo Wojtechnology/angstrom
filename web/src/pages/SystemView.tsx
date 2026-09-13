@@ -21,7 +21,7 @@ export default function SystemView() {
   const [showGtLigand, setShowGtLigand] = useState(true)
   const [showGtReceptor, setShowGtReceptor] = useState(true)
   const [showPredLigand, setShowPredLigand] = useState(true)
-  const [showPredReceptor, setShowPredReceptor] = useState(false)
+  const [showPredReceptor, setShowPredReceptor] = useState(true)
   const [hoveredAtom, setHoveredAtom] = useState<HoveredAtom | null>(null)
   const [showPocket, setShowPocket] = useState(true)
   const [showViolations, setShowViolations] = useState(true)

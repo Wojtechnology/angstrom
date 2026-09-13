@@ -15,7 +15,6 @@ type SortKey = 'similarity' | 'pdb' | string
 export default function Overview() {
   const [data, setData] = useState<IndexData | null>(null)
   const [error, setError] = useState<unknown>(null)
-  const [cutoff, setCutoff] = useState<string>('')
   const [params, setParams] = useSearchParams()
   const [metric, setMetric] = useState<MetricKey>('success')
   const [scatterY, setScatterY] = useState<ScatterY>('rmsd')
@@ -41,20 +40,18 @@ export default function Overview() {
   }, [data, methods, params, setParams])
 
   useEffect(() => {
-    fetchIndex().then((d) => { setData(d); setCutoff(d.default_cutoff) }).catch(setError)
+    fetchIndex().then(setData).catch(setError)
   }, [])
 
   const metricD = metricDef(metric)
   const yDef = scatterYDef(scatterY)
 
-  // systems released on or before the selected cutoff would be inside the training set: hide them
-  const systems = useMemo(() => (data && cutoff ? data.systems.filter((s) => !s.release_date || s.release_date > cutoff) : []), [data, cutoff])
-  const nHidden = data ? data.systems.length - systems.length : 0
+  const systems = useMemo(() => (data ? data.systems : []), [data])
   const stats = useMemo(() => (data ? methods.map((m) => methodStats(data, systems, m.id, metric)) : []), [data, methods, systems, metric])
 
   const bucketPlot = useMemo<Data[]>(() => {
-    if (!data || !cutoff) return []
-    const byBucket = data.buckets.map((_, bi) => systems.filter((s) => bucketOf(similarityAt(s, cutoff), data.buckets) === bi))
+    if (!data) return []
+    const byBucket = data.buckets.map((_, bi) => systems.filter((s) => bucketOf(similarityAt(s), data.buckets) === bi))
     return methods.map((m) => {
       const st = byBucket.map((inBucket) => methodStats(data, inBucket, m.id, metric))
       const ys = st.map((x) => (x.value == null ? null : metricD.kind === 'rate' ? x.value * 100 : x.value))
@@ -67,10 +64,10 @@ export default function Overview() {
         : { color: m.color }
       return { type: 'bar', name: methodPlotName(m), x: data.buckets.map(bucketLabel), y: ys, marker, hovertemplate: hover, customdata: st.map((x) => x.n) } as Data
     })
-  }, [data, methods, systems, cutoff, metric, metricD])
+  }, [data, methods, systems, metric, metricD])
 
   const scatter = useMemo(() => {
-    if (!data || !cutoff) return { traces: [] as Data[], cap: null as number | null, nClamped: 0 }
+    if (!data) return { traces: [] as Data[], cap: null as number | null, nClamped: 0 }
     const all: { s: SystemSummary; m: string; y: number; flagged: boolean }[] = []
     for (const m of methods) {
       for (const s of systems) {
@@ -87,7 +84,7 @@ export default function Overview() {
       const pts = idx.map((i) => all[i])
       return {
         type: 'scatter', mode: 'markers', name: methodPlotName(m),
-        x: pts.map(({ s }) => similarityAt(s, cutoff)),
+        x: pts.map(({ s }) => similarityAt(s)),
         y: idx.map((i) => clamped.ys[i]),
         customdata: pts.map(({ s }, k) => [s.system_id, m.id, s.pdb_id.toUpperCase(), all[idx[k]].y]),
         marker: { size: isDocking(m) ? 8 : 7, color: m.color, symbol: idx.map((i) => (clamped.cap != null && all[i].y > clamped.cap ? 'triangle-up' : isDocking(m) ? 'diamond' : 'circle')), line: { width: pts.map((p) => (p.flagged ? 1.5 : 1)), color: pts.map((p) => (p.flagged ? '#d64545' : '#ffffff')) } },
@@ -95,12 +92,12 @@ export default function Overview() {
       } as Data
     })
     return { traces, cap: clamped.cap, nClamped: clamped.nClamped }
-  }, [data, methods, cutoff, systems, yDef])
+  }, [data, methods, systems, yDef])
 
   const scatterLayout = useMemo<Partial<Layout>>(() => {
     const base: Partial<Layout> = {
       margin: { l: 48, r: 12, t: 8, b: 44 }, legend: { orientation: 'h', y: -0.38, x: 0 }, hovermode: 'closest',
-      xaxis: { title: { text: 'SuCOS-pocket similarity at this cutoff', standoff: 6 }, range: [-3, 103] },
+      xaxis: { title: { text: 'SuCOS-pocket similarity to closest training structure', standoff: 6 }, range: [-3, 103] },
     }
     if (yDef.log) {
       return {
@@ -124,18 +121,17 @@ export default function Overview() {
   }, [navigate])
 
   const rows = useMemo(() => {
-    if (!data || !cutoff) return []
+    if (!data) return []
     const list = [...systems]
-    if (sort === 'similarity') list.sort((a, b) => similarityAt(a, cutoff) - similarityAt(b, cutoff))
+    if (sort === 'similarity') list.sort((a, b) => similarityAt(a) - similarityAt(b))
     else if (sort === 'pdb') list.sort((a, b) => a.pdb_id.localeCompare(b.pdb_id))
     else list.sort((a, b) => (resultFor(data, a.system_id, sort)?.rmsd ?? 99) - (resultFor(data, b.system_id, sort)?.rmsd ?? 99))
     return list
-  }, [data, systems, sort, cutoff])
+  }, [data, systems, sort])
 
   if (error) return <ErrorBox error={error} />
-  if (!data || !cutoff) return <Spinner label="Loading dataset" />
+  if (!data) return <Spinner label="Loading dataset" />
 
-  const cutoffOptions = data.cutoffs.map((c) => ({ value: c, label: c === data.default_cutoff ? `${c} (benchmark)` : c }))
   const metricOptions = METRICS.map((m) => ({ value: m.value, label: m.label }))
   const yOptions = SCATTER_Y.map((y) => ({ value: y.value, label: y.label }))
 
@@ -152,7 +148,7 @@ export default function Overview() {
         </div>
       </div>
 
-      <div className="card px-4 py-3 grid gap-4 lg:grid-cols-[1fr_auto_auto] items-end">
+      <div className="card px-4 py-3 grid gap-4 lg:grid-cols-[1fr_auto] items-end">
         <div className="flex flex-col gap-2 min-w-0">
           <Label>Methods</Label>
           <div className="flex flex-wrap gap-1.5">
@@ -169,18 +165,9 @@ export default function Overview() {
           </div>
         </div>
         <div className="flex flex-col gap-2">
-          <Label>Training cutoff date</Label>
-          <Select value={cutoff} onChange={setCutoff} options={cutoffOptions} width={180} />
-        </div>
-        <div className="flex flex-col gap-2">
           <Label>Metric</Label>
           <Select value={metric} onChange={setMetric} options={metricOptions} width={250} />
         </div>
-        {nHidden > 0 && (
-          <div className="text-[11px] text-fg-3 lg:col-span-3">
-            {nHidden} system{nHidden > 1 ? 's' : ''} released on or before this cutoff {nHidden > 1 ? 'are' : 'is'} hidden (they would be inside the training set).
-          </div>
-        )}
       </div>
 
       <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(auto-fit, minmax(150px, 1fr))` }}>
@@ -201,7 +188,7 @@ export default function Overview() {
         <div className="card p-4">
           <div className="flex items-baseline justify-between mb-1 gap-2">
             <h2 className="font-medium truncate">{metricD.kind === 'rate' ? metricD.short.replace(/^% /, '') : metricD.short} by similarity bucket</h2>
-            <span className="text-[11px] text-fg-3 whitespace-nowrap">cutoff {cutoff} · {systems.length} systems</span>
+            <span className="text-[11px] text-fg-3 whitespace-nowrap">training cutoff {data.default_cutoff} · {systems.length} systems</span>
           </div>
           <Plot
             data={bucketPlot}
@@ -248,7 +235,7 @@ export default function Overview() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((s) => <Row key={s.system_id} s={s} data={data} methods={methods} cutoff={cutoff} />)}
+              {rows.map((s) => <Row key={s.system_id} s={s} data={data} methods={methods} />)}
             </tbody>
           </table>
         </div>
@@ -257,8 +244,8 @@ export default function Overview() {
   )
 }
 
-function Row({ s, data, methods, cutoff }: { s: SystemSummary; data: IndexData; methods: IndexData['methods']; cutoff: string }) {
-  const sim = similarityAt(s, cutoff)
+function Row({ s, data, methods }: { s: SystemSummary; data: IndexData; methods: IndexData['methods'] }) {
+  const sim = similarityAt(s)
   return (
     <tr>
       <td>

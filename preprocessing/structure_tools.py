@@ -36,6 +36,7 @@ class Receptor:
         st.setup_entities()
         st.remove_hydrogens()
         st.remove_waters()
+        shorten_chain_names(st)
         rec = cls(structure=st)
         model = st[0]
         for ch in model:
@@ -86,8 +87,27 @@ class Receptor:
                     if info is None or not info.is_amino_acid():
                         del ch[i]
         st.remove_empty_chains()
-        st.shorten_chain_names()
         return st.make_pdb_string()
+
+
+def shorten_chain_names(st: gemmi.Structure) -> dict:
+    """Rename chains to single characters (PDB format) deterministically: '1.A' -> 'A' when free,
+    otherwise the next unused letter/digit in file order. Applied once at load time so chain ids in
+    the JSON diagnostics equal those in the served PDB files. Returns old -> new mapping."""
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    mapping, used = {}, set()
+    for model in st:
+        for ch in model:
+            if ch.name in mapping:
+                ch.name = mapping[ch.name]
+                continue
+            cand = ch.name.split(".")[-1]
+            if not (len(cand) == 1 and cand not in used):
+                cand = next(c for c in alphabet if c not in used)
+            used.add(cand)
+            mapping[ch.name] = cand
+            ch.name = cand
+    return mapping
 
 
 def kabsch(P: np.ndarray, Q: np.ndarray):

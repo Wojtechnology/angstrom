@@ -3,10 +3,9 @@ import type { IndexData, ResultRow, SystemSummary } from './api'
 export const RMSD_SUCCESS = 2.0
 
 // ---------------------------------------------------------------- similarity
-/** SuCOS-pocket similarity of a system to its closest training structure released before `cutoff` (0–100). */
-export function similarityAt(sys: SystemSummary, cutoff: string): number {
-  const v = sys.similarity_by_cutoff[cutoff]
-  return v == null ? sys.similarity : v
+/** Benchmark SuCOS-pocket similarity (training cutoff 2021-09-30) of a system to its closest training structure, 0–100. */
+export function similarityAt(sys: SystemSummary): number {
+  return sys.similarity
 }
 
 export const SIMILARITY_AXIS_TITLE = 'SuCOS-pocket similarity to closest training structure'
