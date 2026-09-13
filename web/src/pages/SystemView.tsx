@@ -151,7 +151,8 @@ export default function SystemView() {
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start">
         {/* viewer */}
-        <div className="card overflow-hidden flex flex-col lg:sticky lg:top-16">
+        <div className="flex flex-col gap-4 min-w-0">
+        <div className="card overflow-hidden flex flex-col">
           <div className="relative" style={{ height: 520 }}>
             {structures ? (
               <Viewer3D
@@ -220,6 +221,8 @@ export default function SystemView() {
             </div>
           )}
         </div>
+        {detail?.ok && detail.diagnostics && <DiagnosticsPanel d={detail.diagnostics} onHover={setHighlight} hoveredAtom={hoveredAtom?.index ?? null} />}
+        </div>
 
         {/* side panel */}
         <div className="flex flex-col gap-4 min-w-0">
@@ -279,7 +282,6 @@ export default function SystemView() {
                 </div>
               </div>
 
-              {detail.diagnostics && <DiagnosticsPanel d={detail.diagnostics} onHover={setHighlight} hoveredAtom={hoveredAtom?.index ?? null} />}
             </>
           )}
         </div>
@@ -343,11 +345,11 @@ function DiagnosticsPanel({ d, onHover, hoveredAtom }: { d: NonNullable<MethodDe
   return (
     <div className="card px-4 py-3" ref={panel}>
       <div className="flex items-center justify-between">
-        <Label>Where it goes wrong</Label>
+        <Label>Physical violations</Label>
         <span className={`chip ${total ? 'chip-warn' : 'chip-ok'}`}>{total ? `${d.flagged_atoms.length} atoms flagged` : 'clean geometry'}</span>
       </div>
       <div className="text-[11px] text-fg-3 mt-1">Hover an item to highlight its atoms in the viewer, or hover a ligand atom in the viewer to find it here. Bond/angle deviations are measured against the crystal pose of the same ligand.</div>
-      <div className="mt-2 flex flex-col">
+      <div className="mt-2 grid gap-x-6 md:grid-cols-2">
         {items.map((it) => (
           <div key={it.label}>
             <div className={`flex items-center justify-between py-1 text-[12px] ${it.count ? 'text-fg' : 'text-fg-3'}`} onMouseEnter={() => onHover(it.atoms.flat())} onMouseLeave={() => onHover(null)}>
@@ -355,13 +357,12 @@ function DiagnosticsPanel({ d, onHover, hoveredAtom }: { d: NonNullable<MethodDe
               <span className={`mono ${it.count ? 'text-bad' : ''}`}>{it.count}</span>
             </div>
             {it.count > 0 && (
-              <div className="pl-3 pb-1 flex flex-col gap-0.5">
-                {it.atoms.slice(0, 8).map((atoms, i) => (
-                  <div key={i} data-hit={hit(atoms) ? 'true' : undefined} className={`text-[11px] mono cursor-default hover:text-accent rounded px-1 -mx-1 ${hit(atoms) ? 'bg-warn-2 text-fg' : 'text-fg-2'}`} onMouseEnter={() => onHover(atoms)} onMouseLeave={() => onHover(null)}>
+              <div className={`pl-3 pb-1 flex flex-col gap-0.5 ${it.count > 12 ? 'overflow-y-auto pr-1' : ''}`} style={it.count > 12 ? { maxHeight: 260 } : undefined}>
+                {it.atoms.map((atoms, i) => (
+                  <div key={i} data-hit={hit(atoms) ? 'true' : undefined} className={`text-[11px] mono cursor-default hover:text-accent rounded px-1 -mx-1 border-l-2 ${hit(atoms) ? 'bg-warn-2 text-fg border-warn' : 'text-fg-2 border-transparent'}`} onMouseEnter={() => onHover(atoms)} onMouseLeave={() => onHover(null)}>
                     atoms {atoms.map((a) => a + 1).join('–')} · {it.detail(i)}
                   </div>
                 ))}
-                {it.count > 8 && <div className="text-[11px] text-fg-3">+{it.count - 8} more</div>}
               </div>
             )}
           </div>
@@ -371,7 +372,7 @@ function DiagnosticsPanel({ d, onHover, hoveredAtom }: { d: NonNullable<MethodDe
         <div className="mt-2 pt-2 border-t hairline">
           <div className="text-[11px] text-fg-3 mb-1">Residues within 4.5 Å of the predicted ligand</div>
           <div className="flex flex-wrap gap-1">
-            {d.contacts.slice(0, 30).map((c) => <span key={c.residue} className="chip chip-muted mono" title={`${c.min_dist} Å`}>{c.residue}</span>)}
+            {d.contacts.map((c) => <span key={c.residue} className="chip chip-muted mono" title={`${c.min_dist} Å`}>{c.residue}</span>)}
           </div>
         </div>
       )}

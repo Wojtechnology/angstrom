@@ -49,6 +49,7 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
   const propsRef = useRef(props)
   propsRef.current = props
   const hoverLabel = useRef<$3Dmol.Label | null>(null)
+  const applyHoverable = useRef<() => void>(() => {})
   const lastHover = useRef<number | null>(null)
   const [glError, setGlError] = useState<string | null>(null)
 
@@ -107,6 +108,7 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     models.current = m
 
     // reverse hover: ligand atom under the mouse -> label + callback (throttled by atom identity)
+    applyHoverable.current = () => {}
     if (m.predLig) {
       const enter = (atom: $3Dmol.AtomSpec) => {
         if (atom.index == null || atom.index === lastHover.current) return
@@ -126,8 +128,12 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
         propsRef.current.onAtomHover?.(null)
       }
       v.setHoverDuration(60)
-      v.setHoverable({ model: m.predLig }, true, enter, leave)
+      // re-applied after every restyle: setStyle can rebuild atom records and drop the hoverable flag
+      applyHoverable.current = () => v.setHoverable({ model: m.predLig }, true, enter, leave)
+      applyHoverable.current()
     }
+    if (import.meta.env.DEV) (window as unknown as { __angstromViewer?: $3Dmol.GLViewer; __angstromModels?: Models }).__angstromViewer = v
+    if (import.meta.env.DEV) (window as unknown as { __angstromModels?: Models }).__angstromModels = m
 
     styleAll(v, m, propsRef.current)
     v.zoomTo({ model: m.predLig ?? m.gtLig })
@@ -140,6 +146,7 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     const v = viewer.current
     if (!v || !models.current.gtRec) return
     styleAll(v, models.current, props)
+    applyHoverable.current()
     v.render()
   }, [props.showGtReceptor, props.showGtLigand, props.showPredLigand, props.showPredReceptor, props.showPocket, props.showViolations, props.trajectoryMode, props.diagnostics, props.highlightAtoms, props.atomDisplacement, props.predColor])
 
