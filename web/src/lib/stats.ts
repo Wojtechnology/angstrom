@@ -19,6 +19,8 @@ export interface MetricDef {
   short: string
   kind: 'rate' | 'median'
   unit: string
+  /** one-sentence explanation shown under the tiles */
+  description: string
   /** value per result row, or null when not applicable */
   of: (r: ResultRow) => number | null
   /** for rates: predicate */
@@ -26,11 +28,11 @@ export interface MetricDef {
 }
 
 export const METRICS: MetricDef[] = [
-  { value: 'success', label: `RMSD ≤ ${RMSD_SUCCESS} Å (success rate)`, short: `% RMSD ≤ ${RMSD_SUCCESS} Å`, kind: 'rate', unit: '%', of: (r) => r.rmsd ?? null, ok: (r) => r.rmsd != null && r.rmsd <= RMSD_SUCCESS },
-  { value: 'pb_valid', label: 'PoseBusters valid (rate)', short: '% PoseBusters valid', kind: 'rate', unit: '%', of: (r) => (r.pb_pass == null ? null : r.pb_pass ? 1 : 0), ok: (r) => r.pb_pass === true },
-  { value: 'clash_free', label: 'Clash-free at pose (rate)', short: '% clash-free at pose', kind: 'rate', unit: '%', of: (r) => (r.clashes_pose == null ? null : r.clashes_pose === 0 ? 1 : 0), ok: (r) => r.clashes_pose === 0 },
-  { value: 'relax_de', label: 'Median relaxation ΔE, pose − min (lower is better)', short: 'median relaxation ΔE (kcal/mol, lower is better)', kind: 'median', unit: 'kcal/mol', of: (r) => (r.e_interaction_pose != null && r.e_interaction_min != null ? r.e_interaction_pose - r.e_interaction_min : null) },
-  { value: 'strain_local', label: 'Median ligand strain, local (kcal/mol, lower is better)', short: 'median local strain (kcal/mol, lower is better)', kind: 'median', unit: 'kcal/mol', of: (r) => r.strain_local ?? null },
+  { value: 'success', label: `RMSD ≤ ${RMSD_SUCCESS} Å (success rate)`, short: `% RMSD ≤ ${RMSD_SUCCESS} Å`, kind: 'rate', unit: '%', description: `Fraction of systems whose top-ranked pose has ligand RMSD ≤ ${RMSD_SUCCESS} Å.`, of: (r) => r.rmsd ?? null, ok: (r) => r.rmsd != null && r.rmsd <= RMSD_SUCCESS },
+  { value: 'pb_valid', label: 'PoseBusters valid (rate)', short: '% PoseBusters valid', kind: 'rate', unit: '%', description: 'Fraction of poses passing every PoseBusters redock check.', of: (r) => (r.pb_pass == null ? null : r.pb_pass ? 1 : 0), ok: (r) => r.pb_pass === true },
+  { value: 'clash_free', label: 'Clash-free at pose (rate)', short: '% clash-free at pose', kind: 'rate', unit: '%', description: 'Fraction of poses with no ligand–protein heavy-atom clash before relaxation.', of: (r) => (r.clashes_pose == null ? null : r.clashes_pose === 0 ? 1 : 0), ok: (r) => r.clashes_pose === 0 },
+  { value: 'relax_de', label: 'Median relaxation ΔE, pose − min (lower is better)', short: 'median relaxation ΔE (kcal/mol, lower is better)', kind: 'median', unit: 'kcal/mol', description: 'Median of the energy released (MMFF94s, kcal/mol) when the ligand and pocket side chains are minimised with the backbone fixed; large values mean the pose was strained or clashing.', of: (r) => (r.e_interaction_pose != null && r.e_interaction_min != null ? r.e_interaction_pose - r.e_interaction_min : null) },
+  { value: 'strain_local', label: 'Median ligand strain, local (kcal/mol, lower is better)', short: 'median local strain (kcal/mol, lower is better)', kind: 'median', unit: 'kcal/mol', description: "Median of the energy released (MMFF94s, kcal/mol) when the ligand alone is minimised from the predicted pose to the nearest local minimum; the crystal ligand's own strain is the baseline.", of: (r) => r.strain_local ?? null },
 ]
 
 export function metricDef(key: MetricKey): MetricDef {
@@ -81,7 +83,7 @@ export function formatMetric(def: MetricDef, v: number | null): string {
 }
 
 // ---------------------------------------------------------------- scatter y axes
-export type ScatterY = 'rmsd' | 'relax_de' | 'strain_local' | 'strain_global' | 'clashes_pose' | 'pb_fails'
+export type ScatterY = 'rmsd' | 'relax_de' | 'strain_local' | 'clashes_pose' | 'pb_fails'
 
 export interface ScatterYDef {
   value: ScatterY
@@ -89,16 +91,17 @@ export interface ScatterYDef {
   axisTitle: string
   log: boolean
   unit: string
+  /** one-sentence explanation shown under the scatter */
+  description: string
   of: (r: ResultRow) => number | null
 }
 
 export const SCATTER_Y: ScatterYDef[] = [
-  { value: 'rmsd', label: 'Ligand RMSD (Å, log)', axisTitle: 'ligand RMSD (Å)', log: true, unit: 'Å', of: (r) => r.rmsd ?? null },
-  { value: 'relax_de', label: 'Relaxation ΔE (pose − min)', axisTitle: 'relaxation ΔE (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', of: (r) => (r.e_interaction_pose != null && r.e_interaction_min != null ? r.e_interaction_pose - r.e_interaction_min : null) },
-  { value: 'strain_local', label: 'Ligand strain, local', axisTitle: 'local ligand strain (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', of: (r) => r.strain_local ?? null },
-  { value: 'strain_global', label: 'Ligand strain, global', axisTitle: 'global ligand strain (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', of: (r) => r.strain_global ?? null },
-  { value: 'clashes_pose', label: 'Pocket clashes at pose', axisTitle: 'pocket clashes at pose', log: false, unit: '', of: (r) => r.clashes_pose ?? null },
-  { value: 'pb_fails', label: 'PoseBusters failures', axisTitle: 'PoseBusters checks failed', log: false, unit: '', of: (r) => r.pb_fail_count ?? null },
+  { value: 'rmsd', label: 'Ligand RMSD (Å, log)', axisTitle: 'ligand RMSD (Å)', log: true, unit: 'Å', description: 'Symmetry-corrected heavy-atom RMSD between the predicted and crystal ligand after superposing the predicted receptor on the crystal binding-site Cα atoms; ≤ 2 Å counts as success.', of: (r) => r.rmsd ?? null },
+  { value: 'relax_de', label: 'Relaxation ΔE (pose − min)', axisTitle: 'relaxation ΔE (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', description: 'Energy released (MMFF94s, kcal/mol) when the ligand and pocket side chains are minimised with the backbone fixed; large values mean the pose was strained or clashing.', of: (r) => (r.e_interaction_pose != null && r.e_interaction_min != null ? r.e_interaction_pose - r.e_interaction_min : null) },
+  { value: 'strain_local', label: 'Ligand strain, local', axisTitle: 'local ligand strain (kcal/mol, lower is better)', log: false, unit: 'kcal/mol', description: "Energy released (MMFF94s, kcal/mol) when the ligand alone is minimised from the predicted pose to the nearest local minimum; the crystal ligand's own strain is the baseline.", of: (r) => r.strain_local ?? null },
+  { value: 'clashes_pose', label: 'Pocket clashes at pose', axisTitle: 'pocket clashes at pose', log: false, unit: '', description: 'Number of ligand–protein heavy-atom pairs closer than 0.75 × the sum of their van der Waals radii, before any relaxation.', of: (r) => r.clashes_pose ?? null },
+  { value: 'pb_fails', label: 'PoseBusters failures', axisTitle: 'PoseBusters checks failed', log: false, unit: '', description: 'Number of failed PoseBusters redock checks (geometry, stereochemistry, intra- and intermolecular clashes) for the predicted pose.', of: (r) => r.pb_fail_count ?? null },
 ]
 
 export function scatterYDef(key: ScatterY): ScatterYDef {

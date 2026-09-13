@@ -186,6 +186,8 @@ export default function Overview() {
         })}
       </div>
 
+      <div className="text-[12px] text-fg-3 -mt-2">{metricD.description}</div>
+
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="card p-4">
           <div className="flex items-baseline justify-between mb-1 gap-2">
@@ -209,6 +211,7 @@ export default function Overview() {
               <Select value={scatterY} onChange={setScatterY} options={yOptions} width={210} />
             </div>
           </div>
+          <div className="text-[11px] text-fg-3 mb-1">{yDef.description}</div>
           <Plot data={scatter.traces} onClick={onPointClick} layout={scatterLayout} />
           {scatter.cap != null && (
             <div className="text-[11px] text-fg-3 mt-1">{scatter.nClamped} extreme value{scatter.nClamped > 1 ? 's' : ''} clamped to {scatter.cap.toFixed(0)} {yDef.unit} (shown as ▲); hover shows the true value.</div>
