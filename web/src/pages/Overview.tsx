@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowUpRight } from 'lucide-react'
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js-basic-dist-min'
-import { fetchIndex, isDocking, methodPlotName, methodShortName, methodTileLabel, type IndexData, type SystemSummary } from '../lib/api'
+import { fetchIndex, isDocking, methodPlotName, methodShortName, methodTileLabel, type IndexData, type SystemSummary, rcsbUrl } from '../lib/api'
 import {
   bucketLabel, bucketOf, clampOutliers, fmt, formatMetric, metricDef, methodStats, METRICS, resultFor,
   RMSD_SUCCESS, SCATTER_Y, scatterYDef, SIMILARITY_AXIS_TITLE, similarityAt, type MetricKey, type ScatterY,
@@ -250,7 +250,7 @@ function Row({ s, data, methods }: { s: SystemSummary; data: IndexData; methods:
   return (
     <tr>
       <td>
-        <Link to={`/system/${s.system_id}`} className="font-medium hover:text-accent">{s.pdb_id.toUpperCase()}</Link>
+        <a href={rcsbUrl(s.pdb_id)} target="_blank" rel="noreferrer" className="font-medium hover:text-accent" title="Ground truth entry on RCSB">{s.pdb_id.toUpperCase()}</a>
       </td>
       <td>
         <Tip content={<span className="mono">{s.ligand_smiles}</span>}>
