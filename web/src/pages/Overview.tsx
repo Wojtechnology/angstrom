@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { ArrowUpRight, ExternalLink } from 'lucide-react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { ArrowUpRight } from 'lucide-react'
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js-basic-dist-min'
-import { fetchIndex, rcsbUrl, type IndexData, type SystemSummary } from '../lib/api'
+import { fetchIndex, type IndexData, type SystemSummary } from '../lib/api'
 import {
-  axisAvailable, bucketLabel, bucketOf, clampOutliers, filterSystems, fmt, formatMetric, metricDef, methodStats, METRICS, resultFor,
+  axisAvailable, bucketLabel, bucketOf, clampOutliers, fmt, formatMetric, metricDef, methodStats, METRICS, resultFor,
   RMSD_SUCCESS, SCATTER_Y, scatterYDef, SIM_AXES, similarityAt, type MetricKey, type ScatterY, type SimAxis,
 } from '../lib/stats'
-import { ErrorBox, Label, Select, Slider, Spinner, Stat, Tip } from '../components/ui'
+import { ErrorBox, Label, Select, Spinner, Stat, Tip } from '../components/ui'
 import Plot from '../components/Plot'
 
 type SortKey = 'similarity' | 'pdb' | string
@@ -15,13 +15,31 @@ type SortKey = 'similarity' | 'pdb' | string
 export default function Overview() {
   const [data, setData] = useState<IndexData | null>(null)
   const [error, setError] = useState<unknown>(null)
-  const [threshold, setThreshold] = useState(100)
   const [cutoff, setCutoff] = useState<string>('')
+  const [params, setParams] = useSearchParams()
   const [axis, setAxis] = useState<SimAxis>('sucos')
   const [metric, setMetric] = useState<MetricKey>('success')
   const [scatterY, setScatterY] = useState<ScatterY>('rmsd')
   const [sort, setSort] = useState<SortKey>('similarity')
   const navigate = useNavigate()
+
+  // method multi-select, persisted in the URL as ?m=af3,boltz (absent = all)
+  const methods = useMemo(() => {
+    if (!data) return []
+    const q = params.get('m')
+    const wanted = q ? new Set(q.split(',').filter(Boolean)) : null
+    const sel = data.methods.filter((m) => !wanted || wanted.has(m.id))
+    return sel.length ? sel : data.methods
+  }, [data, params])
+  const toggleMethod = useCallback((id: string) => {
+    if (!data) return
+    const cur = new Set(methods.map((m) => m.id))
+    if (cur.has(id)) { if (cur.size === 1) return; cur.delete(id) } else cur.add(id)
+    const next = new URLSearchParams(params)
+    if (cur.size === data.methods.length) next.delete('m')
+    else next.set('m', data.methods.filter((m) => cur.has(m.id)).map((m) => m.id).join(','))
+    setParams(next, { replace: true })
+  }, [data, methods, params, setParams])
 
   useEffect(() => {
     fetchIndex().then((d) => { setData(d); setCutoff(d.default_cutoff) }).catch(setError)
@@ -31,13 +49,13 @@ export default function Overview() {
   const metricD = metricDef(metric)
   const yDef = scatterYDef(scatterY)
 
-  const systems = useMemo(() => (data && cutoff ? filterSystems(data, cutoff, threshold, axis) : []), [data, cutoff, threshold, axis])
-  const stats = useMemo(() => (data ? data.methods.map((m) => methodStats(data, systems, m.id, metric)) : []), [data, systems, metric])
+  const systems = useMemo(() => (data ? data.systems : []), [data])
+  const stats = useMemo(() => (data ? methods.map((m) => methodStats(data, systems, m.id, metric)) : []), [data, methods, systems, metric])
 
   const bucketPlot = useMemo<Data[]>(() => {
     if (!data || !cutoff) return []
     const byBucket = data.buckets.map((_, bi) => data.systems.filter((s) => bucketOf(similarityAt(s, cutoff, axis), data.buckets) === bi))
-    return data.methods.map((m) => {
+    return methods.map((m) => {
       const st = byBucket.map((inBucket) => methodStats(data, inBucket, m.id, metric))
       const ys = st.map((x) => (x.value == null ? null : metricD.kind === 'rate' ? x.value * 100 : x.value))
       const hover = metricD.kind === 'rate'
@@ -45,12 +63,12 @@ export default function Overview() {
         : `${m.name}<br>%{x} similarity: %{y:.1f} ${metricD.unit}<br>n=%{customdata}<extra></extra>`
       return { type: 'bar', name: m.name, x: data.buckets.map(bucketLabel), y: ys, marker: { color: m.color }, hovertemplate: hover, customdata: st.map((x) => x.n) } as Data
     })
-  }, [data, cutoff, axis, metric, metricD])
+  }, [data, methods, cutoff, axis, metric, metricD])
 
   const scatter = useMemo(() => {
     if (!data || !cutoff) return { traces: [] as Data[], cap: null as number | null, nClamped: 0 }
     const all: { s: SystemSummary; m: string; y: number; flagged: boolean }[] = []
-    for (const m of data.methods) {
+    for (const m of methods) {
       for (const s of systems) {
         const r = resultFor(data, s.system_id, m.id)
         if (!r || !r.ok) continue
@@ -60,7 +78,7 @@ export default function Overview() {
       }
     }
     const clamped = clampOutliers(all.map((p) => p.y), !yDef.log)
-    const traces = data.methods.map((m) => {
+    const traces = methods.map((m) => {
       const idx = all.map((p, i) => (p.m === m.id ? i : -1)).filter((i) => i >= 0)
       const pts = idx.map((i) => all[i])
       return {
@@ -73,7 +91,7 @@ export default function Overview() {
       } as Data
     })
     return { traces, cap: clamped.cap, nClamped: clamped.nClamped }
-  }, [data, cutoff, axis, systems, yDef])
+  }, [data, methods, cutoff, axis, systems, yDef])
 
   const scatterLayout = useMemo<Partial<Layout>>(() => {
     const base: Partial<Layout> = {
@@ -133,12 +151,18 @@ export default function Overview() {
 
       <div className="card px-4 py-3 grid gap-4 lg:grid-cols-[1fr_auto_auto_auto] items-end">
         <div className="flex flex-col gap-2 min-w-0">
-          <div className="flex items-center justify-between">
-            <Label>Max similarity to training set</Label>
-            <span className="mono text-fg-2">≤ {threshold} · {systems.length} of {data.systems.length} systems</span>
+          <Label>Methods</Label>
+          <div className="flex flex-wrap gap-1.5">
+            {data.methods.map((m) => {
+              const on = methods.some((x) => x.id === m.id)
+              return (
+                <button key={m.id} type="button" className="btn" data-active={on} style={on ? undefined : { color: 'var(--color-fg-3)' }} onClick={() => toggleMethod(m.id)} aria-pressed={on}>
+                  <span className="w-2 h-2 rounded-full" style={{ background: m.color, opacity: on ? 1 : 0.4 }} />
+                  {m.name}
+                </button>
+              )
+            })}
           </div>
-          <Slider value={threshold} onChange={setThreshold} min={0} max={100} step={1} />
-          <div className="flex justify-between text-[11px] text-fg-3"><span>novel</span><span>seen before</span></div>
         </div>
         <div className="flex flex-col gap-2">
           <Label>Similarity axis</Label>
@@ -172,7 +196,7 @@ export default function Overview() {
         <div className="card p-4">
           <div className="flex items-baseline justify-between mb-1 gap-2">
             <h2 className="font-medium truncate">{metricD.kind === 'rate' ? metricD.short.replace(/^% /, '') : metricD.short} by similarity bucket</h2>
-            <span className="text-[11px] text-fg-3 whitespace-nowrap">cutoff {cutoff} · all systems</span>
+            <span className="text-[11px] text-fg-3 whitespace-nowrap">cutoff {cutoff} · {data.systems.length} systems</span>
           </div>
           <Plot
             data={bucketPlot}
@@ -201,10 +225,10 @@ export default function Overview() {
       <div className="card overflow-hidden">
         <div className="px-4 py-3 border-b hairline flex items-center gap-3">
           <h2 className="font-medium">Systems</h2>
-          <span className="text-fg-3 text-[12px] hidden md:inline-flex items-center gap-1.5">click a row for the 3D breakdown · cells show ligand RMSD (Å) · <span className="w-1.5 h-1.5 rounded-full bg-warn inline-block" /> PoseBusters violation · <span className="w-1.5 h-1.5 rounded-full bg-bad inline-block" /> pocket clash at pose</span>
+          <span className="text-fg-3 text-[12px] hidden md:inline-flex items-center gap-1.5">ligand RMSD (Å) · <span className="w-1.5 h-1.5 rounded-full bg-warn inline-block" /> PoseBusters violation · <span className="w-1.5 h-1.5 rounded-full bg-bad inline-block" /> pocket clash at pose</span>
           <div className="ml-auto flex items-center gap-2">
             <Label>sort</Label>
-            <Select value={sort} onChange={setSort} options={[{ value: 'similarity', label: 'Similarity' }, { value: 'pdb', label: 'PDB id' }, ...data.methods.map((m) => ({ value: m.id, label: `${m.name} RMSD` }))]} width={150} />
+            <Select value={sort} onChange={setSort} options={[{ value: 'similarity', label: 'Similarity' }, { value: 'pdb', label: 'PDB id' }, ...methods.map((m) => ({ value: m.id, label: `${m.name} RMSD` }))]} width={150} />
           </div>
         </div>
         <div className="overflow-auto max-h-[560px]">
@@ -214,12 +238,12 @@ export default function Overview() {
                 <th>System</th>
                 <th>Ligand</th>
                 <th className="text-right" title={axisDef.axisTitle}>{axisDef.short}</th>
-                {data.methods.map((m) => <th key={m.id} className="text-right">{m.name}</th>)}
+                {methods.map((m) => <th key={m.id} className="text-right">{m.name}</th>)}
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((s) => <Row key={s.system_id} s={s} data={data} cutoff={cutoff} axis={axis} />)}
+              {rows.map((s) => <Row key={s.system_id} s={s} data={data} methods={methods} cutoff={cutoff} axis={axis} />)}
             </tbody>
           </table>
         </div>
@@ -228,17 +252,16 @@ export default function Overview() {
   )
 }
 
-function Row({ s, data, cutoff, axis }: { s: SystemSummary; data: IndexData; cutoff: string; axis: SimAxis }) {
+function Row({ s, data, methods, cutoff, axis }: { s: SystemSummary; data: IndexData; methods: IndexData['methods']; cutoff: string; axis: SimAxis }) {
   const sim = similarityAt(s, cutoff, axis)
   return (
     <tr>
       <td>
         <Link to={`/system/${s.system_id}`} className="font-medium hover:text-accent">{s.pdb_id.toUpperCase()}</Link>
-        <span className="mono text-fg-3 ml-2 hidden xl:inline">{s.system_id}</span>
       </td>
       <td>
         <Tip content={<span className="mono">{s.ligand_smiles}</span>}>
-          <span className="mono text-fg-2">{s.ccd} · {s.n_heavy} heavy atoms</span>
+          <a className="mono text-fg-2 hover:text-accent" href={`https://www.rcsb.org/ligand/${encodeURIComponent(s.ccd)}`} target="_blank" rel="noreferrer">{s.ccd}</a>
         </Tip>
       </td>
       <td className="text-right tabular-nums">
@@ -247,15 +270,12 @@ function Row({ s, data, cutoff, axis }: { s: SystemSummary; data: IndexData; cut
           <span className="mono w-9 inline-block">{sim.toFixed(0)}</span>
         </span>
       </td>
-      {data.methods.map((m) => {
+      {methods.map((m) => {
         const r = resultFor(data, s.system_id, m.id)
         return <td key={m.id} className="text-right tabular-nums"><RmsdCell rmsd={r?.ok ? r.rmsd : null} pb={r?.pb_pass} clashes={r?.clashes_pose} /></td>
       })}
       <td className="text-right whitespace-nowrap">
-        <a className="btn" style={{ border: 'none', height: 24 }} href={rcsbUrl(s.pdb_id)} target="_blank" rel="noreferrer" title="Ground truth on RCSB">
-          <ExternalLink size={12} /> RCSB
-        </a>
-        <Link className="btn ml-1" style={{ border: 'none', height: 24 }} to={`/system/${s.system_id}`}>
+        <Link className="btn" style={{ border: 'none', height: 24 }} to={`/system/${s.system_id}`}>
           <ArrowUpRight size={12} /> 3D
         </Link>
       </td>

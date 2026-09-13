@@ -85,7 +85,15 @@ class RangeStream(io.RawIOBase):
 
 
 def main():
-    total = int(requests.head(URL, allow_redirects=True).headers["Content-Length"])
+    total = 0
+    while total < 1_000_000_000:  # Zenodo returns a small error page on 504; wait it out
+        try:
+            r = requests.head(URL, allow_redirects=True, timeout=120)
+            r.raise_for_status()
+            total = int(r.headers["Content-Length"])
+        except Exception as e:  # noqa
+            log(f"HEAD failed: {e}")
+            time.sleep(60)
     log(f"total bytes {total}")
     stream = RangeStream(total)
     buffered = io.BufferedReader(stream, buffer_size=8 * 1024 * 1024)

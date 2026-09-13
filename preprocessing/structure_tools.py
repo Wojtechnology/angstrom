@@ -488,6 +488,32 @@ def pocket_frames_to_pdb(pocket_info: list, frames: list) -> str:
     return "".join(out)
 
 
+def _parse_protein(pdb_text: str):
+    """PDB -> RDKit mol with standard-residue bond orders. Proximity bonding occasionally adds a
+    spurious bond between clashing atoms in predicted models (e.g. a backbone O gaining a third
+    neighbour); such bonds are removed (longest first) until the molecule sanitises."""
+    mol = Chem.MolFromPDBBlock(pdb_text, removeHs=False, sanitize=False, proximityBonding=True)
+    if mol is None:
+        return None
+    rw = Chem.RWMol(mol)
+    for _ in range(50):
+        probs = [p for p in Chem.DetectChemistryProblems(rw) if p.GetType() == "AtomValenceException"]
+        if not probs:
+            break
+        conf = rw.GetConformer()
+        for p in probs:
+            a = rw.GetAtomWithIdx(p.GetAtomIdx())
+            bonds = sorted(a.GetBonds(), key=lambda b: -rdMolTransforms.GetBondLength(conf, b.GetBeginAtomIdx(), b.GetEndAtomIdx()))
+            if bonds:
+                rw.RemoveBond(bonds[0].GetBeginAtomIdx(), bonds[0].GetEndAtomIdx())
+    try:
+        mol = rw.GetMol()
+        Chem.SanitizeMol(mol)
+        return mol
+    except Exception:  # noqa
+        return None
+
+
 def minimise_in_pocket(lig_mol: Chem.Mol, receptor_pdb_text: str, cutoff: float = 8.0, restrain_cut: float = 6.0,
                        max_frames: int = 16, its_per_frame: int = 40):
     """Restrained minimisation of the ligand inside its binding pocket (MMFF94s, UFF fallback).
@@ -500,7 +526,7 @@ def minimise_in_pocket(lig_mol: Chem.Mol, receptor_pdb_text: str, cutoff: float 
     Returns (summary, ligand_frames, pocket_frames, pocket_info, ligand_with_Hs).
     """
     lig = Chem.RemoveHs(lig_mol)
-    prot = Chem.MolFromPDBBlock(receptor_pdb_text, removeHs=False, sanitize=True, proximityBonding=True)
+    prot = _parse_protein(receptor_pdb_text)
     if prot is None:
         return {"ok": False, "error": "protein PDB block could not be parsed"}, None, None, None, None
     lig_xyz = lig.GetConformer().GetPositions()

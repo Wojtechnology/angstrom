@@ -236,7 +236,7 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
         row = method_rows.get(mid)
         res = {"ok": False}
         prev = existing.get(mid)
-        if prev and prev.get("ok") and "pocket_minimisation" in prev and (sdir / f"{mid}_ligand.sdf.gz").exists():
+        if prev and prev.get("ok") and (prev.get("pocket_minimisation") or {}).get("ok") and (sdir / f"{mid}_ligand.sdf.gz").exists():
             detail["methods"][mid] = prev
             continue
         try:
