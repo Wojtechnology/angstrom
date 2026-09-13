@@ -1,0 +1,8 @@
+{
+  "name": "angstrom",
+  "private": true,
+  "description": "Root manifest so Vercel's default install step succeeds; the frontend lives in web/ and is built by the buildCommand in vercel.json.",
+  "scripts": {
+    "build": "cd web && npm ci && npm run build"
+  }
+}

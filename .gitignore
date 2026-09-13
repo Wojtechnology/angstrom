@@ -1,0 +1,14 @@
+# raw data downloads (tens of GB) - never commit
+preprocessing/raw/
+preprocessing/.venv/
+preprocessing/work/
+api/.venv/
+**/__pycache__/
+*.pyc
+web/node_modules/
+web/dist/
+.vercel
+.DS_Store
+web/.vite/
+api/__pycache__/
+/package-lock.json

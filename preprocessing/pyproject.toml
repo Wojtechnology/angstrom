@@ -1,0 +1,18 @@
+[project]
+name = "angstrom-preprocessing"
+version = "0.1.0"
+description = "Preprocessing pipeline: subset Runs N' Poses, compute RMSD, PoseBusters checks and RDKit minimisation trajectories"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "rdkit>=2024.3",
+    "posebusters>=0.3",
+    "gemmi",
+    "requests",
+    "tqdm",
+]
+
+[tool.uv]
+package = false
