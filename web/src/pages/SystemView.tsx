@@ -393,12 +393,7 @@ function PocketCard({ pocket, gt, plot, showPlot, excess }: { pocket: PocketMini
 function DiagnosticsPanel({ d, contacts, onHover, onHoverClash, onHoverContact, hoveredAtom, hoveredClash }: { d: NonNullable<MethodDetail['diagnostics']>; contacts: Contacts | null; onHover: (atoms: number[] | null) => void; onHoverClash: (c: ClashRef | null) => void; onHoverContact: (residue: string | null, gtAtoms: number[] | null) => void; hoveredAtom: number | null; hoveredClash: ClashRef | null }) {
   const s = d.summary
   const panel = useRef<HTMLDivElement>(null)
-  // reverse hover: scroll the first sidebar entry containing the hovered viewer atom into view
-  useEffect(() => {
-    if ((hoveredAtom == null && hoveredClash == null) || !panel.current) return
-    const first = panel.current.querySelector<HTMLElement>('[data-hit="true"]')
-    first?.scrollIntoView({ block: 'nearest' })
-  }, [hoveredAtom, hoveredClash])
+  // reverse hover only marks the matching rows; it deliberately does not scroll the page
   const hit = (atoms: number[], clash?: ClashRef) =>
     (hoveredClash != null && clash != null && hoveredClash.kind === clash.kind && hoveredClash.index === clash.index)
     || (hoveredClash == null && hoveredAtom != null && atoms.includes(hoveredAtom))
