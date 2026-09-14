@@ -44,6 +44,10 @@ def fetch(start, end):
             time.sleep(min(120, 5 * attempt))
 
 
+def _pos(stream):
+    return stream.pos if hasattr(stream, "pos") else stream.tell()
+
+
 def log(msg):
     with open(LOG, "a") as f:
         f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
@@ -86,6 +90,17 @@ class RangeStream(io.RawIOBase):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--local", help="read a locally downloaded prediction_files.tar.gz instead of streaming from Zenodo")
+    ap.add_argument("--methods", nargs="*", help="override WANTED_METHODS (e.g. --methods chai protenix)")
+    args = ap.parse_args()
+    global WANTED_METHODS
+    if args.methods:
+        WANTED_METHODS = set(args.methods)
+    if args.local:
+        run(open(args.local, "rb"), Path(args.local).stat().st_size, buffer_size=32 * 1024 * 1024)
+        return
     total = 0
     while total < 1_000_000_000:  # Zenodo returns a small error page on 504; wait it out
         try:
@@ -96,8 +111,12 @@ def main():
             log(f"HEAD failed: {e}")
             time.sleep(60)
     log(f"total bytes {total}")
-    stream = RangeStream(total)
-    buffered = io.BufferedReader(stream, buffer_size=8 * 1024 * 1024)
+    run(RangeStream(total), total)
+
+
+def run(raw_stream, total, buffer_size=8 * 1024 * 1024):
+    stream = raw_stream
+    buffered = io.BufferedReader(stream, buffer_size=buffer_size)
     tar = tarfile.open(fileobj=buffered, mode="r|gz")
     n_ok = 0
     seen_wanted, seen_other = set(), set()
@@ -108,7 +127,7 @@ def main():
             man.write(member.name + "\n")
             if time.time() - last_log > 60:
                 last_log = time.time()
-                log(f"{100 * stream.pos / total:.1f}% {stream.pos / (time.time() - t0) / 1e6:.1f} MB/s extracted={n_ok} at={member.name.split('prediction_files/')[-1][:60]}")
+                log(f"{100 * _pos(stream) / total:.1f}% {_pos(stream) / (time.time() - t0) / 1e6:.1f} MB/s extracted={n_ok} at={member.name.split('prediction_files/')[-1][:60]}")
             parts = member.name.split("prediction_files/", 1)
             if len(parts) < 2 or not member.isfile():
                 continue
