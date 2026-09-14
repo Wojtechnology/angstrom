@@ -76,7 +76,9 @@ def load_inputs():
         p = RAW / "predictions" / "predictions" / f"{m['csv']}.csv"
         if p.exists():
             df = pd.read_csv(p, low_memory=False)
-            preds[m["id"]] = df[df["ligand_is_proper"] == True] if "ligand_is_proper" in df else df  # noqa: E712
+            if "ligand_is_proper" in df:  # keep proper-ligand rows plus unassigned (NaN chain) rows, see top_ranked()
+                df = df[(df["ligand_is_proper"] == True) | df["ligand_instance_chain"].isna()]  # noqa: E712
+            preds[m["id"]] = df
     sim = pd.read_parquet(RAW / "subset_similarity_scores.parquet") if (RAW / "subset_similarity_scores.parquet").exists() else None
     return ann, preds, sim
 
@@ -135,11 +137,23 @@ META_KEYS = ("system_id", "pdb_id", "ligand_smiles", "ccd", "ligand_chain", "n_h
 
 def top_ranked(df: pd.DataFrame, system_id: str, ligand_chain: str):
     rows = df[(df["target"] == system_id) & (df["ligand_instance_chain"] == ligand_chain)]
+    unassigned = False
     if rows.empty:
-        return None
+        # the benchmark scored the target but did not assign this ligand chain (NaN rows):
+        # use those rows for seed/sample/ranking only; the accuracy columns cannot be trusted
+        rows = df[(df["target"] == system_id) & (df["ligand_instance_chain"].isna())]
+        if rows.empty:
+            return None
+        unassigned = True
     if "ranking_score" in rows and rows["ranking_score"].notna().any():
         rows = rows.sort_values("ranking_score", ascending=False)
-    return rows.iloc[0]
+    row = rows.iloc[0].copy()
+    if unassigned:
+        for c in ("rmsd", "lddt_pli", "lddt_lp", "bb_rmsd", "model_ligand_chain_rmsd", "model_ligand_chain_lddt_pli", "model_ligand_chain"):
+            if c in row:
+                row[c] = None
+        row["benchmark_row"] = "unassigned"
+    return row
 
 
 def find_model_file(method: dict, system_id: str, seed, sample) -> Path | None:
@@ -168,17 +182,30 @@ def find_model_file(method: dict, system_id: str, seed, sample) -> Path | None:
 def ligand_chain_in_model(row, path: Path, gt_mol, n_prot_chains: int) -> str:
     """Chain id of the ligand in the model file: use the benchmark's mapping when given, otherwise
     pick the hetero chain whose heavy-atom count matches the template."""
-    for col in ("model_ligand_chain_rmsd", "model_ligand_chain_lddt_pli", "model_ligand_chain"):
-        if col in row and isinstance(row[col], str) and row[col]:
-            return row[col]
     import gemmi
     s = gemmi.read_structure(str(path))
     n = Chem.RemoveHs(gt_mol).GetNumAtoms()
-    for ch in s[0]:
-        heavy = sum(1 for r in ch for a in r if a.element.name != "H" and gemmi.find_tabulated_residue(r.name) is None)
-        if heavy == n:
-            return ch.name
-    raise RuntimeError("ligand chain not found")
+
+    def heavy_count(ch):  # heavy atoms of non-polymer, non-water residues (gemmi tabulates unknown names too)
+        n_ = 0
+        for r in ch:
+            info = gemmi.find_tabulated_residue(r.name)
+            if info is not None and (info.is_amino_acid() or info.is_nucleic_acid() or info.is_water()):
+                continue
+            n_ += sum(1 for a in r if a.element.name != "H")
+        return n_
+
+    for col in ("model_ligand_chain_rmsd", "model_ligand_chain_lddt_pli", "model_ligand_chain"):
+        if col in row and isinstance(row[col], str) and row[col]:
+            for ch in s[0]:
+                if ch.name == row[col] and heavy_count(ch) == n:
+                    return row[col]
+    matches = [ch.name for ch in s[0] if heavy_count(ch) == n]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise RuntimeError("no chain in the model has the ligand's heavy-atom count")
+    raise RuntimeError(f"ligand chain ambiguous: {matches} share the ligand's heavy-atom count")
 
 
 # --------------------------------------------------------------------------- per-system work
@@ -319,6 +346,7 @@ def process_system(system_id: str, meta: dict, method_rows: dict, method_list: l
                           "ligand": f"{mid}_ligand.sdf", "traj": f"{mid}_traj.sdf", **pocket_files},
                 "model_file": str(path.relative_to(RAW)),
                 "vina_score": _f(row.get("vina_score")), "pose_scores": row.get("pose_scores"),
+                "benchmark_row": row.get("benchmark_row", "assigned"),
             }
         except Exception as e:  # noqa
             res = {"ok": False, "error": f"{type(e).__name__}: {e}"}

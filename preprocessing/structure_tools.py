@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import math
+import re
 from dataclasses import dataclass, field
 
 import gemmi
@@ -537,6 +538,46 @@ def _parse_protein(pdb_text: str):
         return None
 
 
+def _extract_pocket(prot: Chem.Mol, keep: list):
+    """Sub-molecule of the kept atoms that sanitises. Hydrogen counts are frozen from the sanitised
+    full protein so aromatic HIS/TRP rings kekulise unambiguously; if sanitisation still fails, retry
+    without kekulisation, then drop the offending residue(s). Returns (pocket, keep, fallback)."""
+    frozen = Chem.RWMol(prot)
+    for a in frozen.GetAtoms():
+        a.SetNumExplicitHs(a.GetTotalNumHs()); a.SetNoImplicit(True)
+    keep = list(keep)
+    for attempt in range(6):
+        em = Chem.RWMol(frozen)
+        for idx in sorted(set(range(prot.GetNumAtoms())) - set(keep), reverse=True):
+            em.RemoveAtom(idx)
+        pocket = em.GetMol()
+        pocket.UpdatePropertyCache(strict=False)
+        try:
+            Chem.SanitizeMol(pocket)
+            return pocket, keep, None if attempt == 0 else f"dropped_residues:{attempt}"
+        except Chem.KekulizeException as e:
+            try:  # partial sanitisation without kekulisation
+                p2 = Chem.Mol(pocket)
+                Chem.SanitizeMol(p2, sanitizeOps=Chem.SANITIZE_ALL ^ Chem.SANITIZE_KEKULIZE ^ Chem.SANITIZE_SETAROMATICITY)
+                Chem.SetAromaticity(p2)
+                if AllChem.MMFFHasAllMoleculeParams(p2):
+                    return p2, keep, "no_kekulize"
+            except Exception:  # noqa
+                pass
+            bad = [int(x) for x in re.findall(r"\d+", str(e).split("atoms:")[-1])] if "atoms:" in str(e) else []
+            if not bad:
+                raise
+            # map pocket atom indices back to the full-protein indices and drop their residues
+            res = set()
+            for i in bad:
+                ri = pocket.GetAtomWithIdx(i).GetPDBResidueInfo()
+                res.add((ri.GetChainId(), ri.GetResidueNumber(), ri.GetInsertionCode()))
+            keep = [k for k in keep if (prot.GetAtomWithIdx(k).GetPDBResidueInfo().GetChainId(),
+                                        prot.GetAtomWithIdx(k).GetPDBResidueInfo().GetResidueNumber(),
+                                        prot.GetAtomWithIdx(k).GetPDBResidueInfo().GetInsertionCode()) not in res]
+    raise RuntimeError("pocket could not be sanitised")
+
+
 def minimise_in_pocket(lig_mol: Chem.Mol, receptor_pdb_text: str, cutoff: float = 8.0, restrain_cut: float = 6.0,
                        its_per_frame: int = 40, max_its: int = 1000):
     """Restrained minimisation of the ligand inside its binding pocket (MMFF94s, UFF fallback).
@@ -564,13 +605,8 @@ def minimise_in_pocket(lig_mol: Chem.Mol, receptor_pdb_text: str, cutoff: float 
             if (a.GetPDBResidueInfo().GetChainId(), a.GetPDBResidueInfo().GetResidueNumber(), a.GetPDBResidueInfo().GetInsertionCode()) in keep_res]
     if len(keep) < 10:
         return {"ok": False, "error": "no pocket residues within cutoff"}, None, None, None, None
-    em = Chem.RWMol(prot)
-    for idx in sorted(set(range(prot.GetNumAtoms())) - set(keep), reverse=True):
-        em.RemoveAtom(idx)
-    pocket = em.GetMol()
+    pocket, keep, parse_fallback = _extract_pocket(prot, keep)
     d_keep = d[keep]
-    pocket.UpdatePropertyCache(strict=False)
-    Chem.SanitizeMol(pocket)
     res_labels = []
     seen = set()
     for a in pocket.GetAtoms():
@@ -704,7 +740,7 @@ def minimise_in_pocket(lig_mol: Chem.Mol, receptor_pdb_text: str, cutoff: float 
     disp = np.linalg.norm(lig1 - lig0, axis=1)
     pk_disp = np.linalg.norm(pk_frames[-1] - pk_frames[0], axis=1)
     summary = {
-        "ok": True, "force_field": ff_kind,
+        "ok": True, "force_field": ff_kind, "pocket_parse_fallback": parse_fallback,
         "n_pocket_residues": len(res_labels), "n_pocket_atoms": len(heavy_p), "pocket_residues": res_labels,
         "n_fixed": n_fixed, "n_restrained": n_restr,
         "e_complex_pose": round(e_pose, 2), "e_complex_min": round(e_min, 2),
