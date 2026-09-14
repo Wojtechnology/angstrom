@@ -54,7 +54,7 @@ const POCKET_CUTOFF = 4.5
 const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, ref) {
   const el = useRef<HTMLDivElement>(null)
   const viewer = useRef<$3Dmol.GLViewer | null>(null)
-  const models = useRef<Models>({})
+  const models = useRef<Models>({ labels: [] })
   const loadedKey = useRef<string>('')
   const propsRef = useRef(props)
   propsRef.current = props
@@ -62,7 +62,9 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
   const lastHover = useRef<number | null>(null)
   const cancelHover = useRef<() => void>(() => {})
   const pointerInside = useRef(false)
-  const movedSinceEnter = useRef(false)
+  // timestamps used to tell a real unhover (pointer moved) from one caused by a geometry rebuild after a restyle
+  const lastMoveTs = useRef(0)
+  const lastRestyleTs = useRef(0)
   const [glError, setGlError] = useState<string | null>(null)
 
   useImperativeHandle(ref, () => ({
@@ -95,10 +97,11 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     ro.observe(el.current)
     const node = el.current
     const onEnter = () => { pointerInside.current = true }
-    const onMove = () => { movedSinceEnter.current = true }
-    const onLeave = () => { pointerInside.current = false; cancelHover.current(); propsRef.current.onClashHover?.(null) }
-    node.addEventListener('mouseenter', onEnter); node.addEventListener('mousemove', onMove); node.addEventListener('mouseleave', onLeave)
-    return () => { ro.disconnect(); node.removeEventListener('mouseenter', onEnter); node.removeEventListener('mousemove', onMove); node.removeEventListener('mouseleave', onLeave); v.clear(); viewer.current = null }
+    const onMove = () => { lastMoveTs.current = performance.now() }
+    const onLeave = () => { pointerInside.current = false; cancelHover.current(); clearLabels(v, models.current); v.render(); propsRef.current.onClashHover?.(null) }
+    // capture phase so the timestamp is updated before 3Dmol's own mousemove handling runs
+    node.addEventListener('mouseenter', onEnter); node.addEventListener('mousemove', onMove, true); node.addEventListener('mouseleave', onLeave)
+    return () => { ro.disconnect(); node.removeEventListener('mouseenter', onEnter); node.removeEventListener('mousemove', onMove, true); node.removeEventListener('mouseleave', onLeave); v.clear(); viewer.current = null }
   }, [])
 
   // (re)load models when the structure strings change
@@ -109,7 +112,7 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     if (key === loadedKey.current) return
     loadedKey.current = key
     v.removeAllModels(); v.removeAllShapes(); v.removeAllLabels()
-    const m: Models = {}
+    const m: Models = { labels: [] }
     m.gtRec = v.addModel(props.gtReceptor, 'pdb')
     m.gtLig = v.addModel(props.gtLigand, 'sdf')
     if (props.predReceptor) m.predRec = v.addModel(props.predReceptor, 'pdb')
@@ -131,13 +134,12 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
         // ignore hovers whose delayed timer fires after the pointer already left the canvas
         if (!pointerInside.current) return
         lastHover.current = atom.index
-        movedSinceEnter.current = false
         propsRef.current.onAtomHover?.({ index: atom.index, elem: atom.elem ?? '' })
       }
       const leave = (force = false) => {
         if (lastHover.current == null) return
         // a restyle rebuilds the geometry and makes 3Dmol report an unhover although the pointer never moved: ignore those
-        if (!force && pointerInside.current && !movedSinceEnter.current) return
+        if (!force && pointerInside.current && lastRestyleTs.current > lastMoveTs.current) return
         lastHover.current = null
         propsRef.current.onAtomHover?.(null)
       }
@@ -161,6 +163,7 @@ const Viewer3D = forwardRef<ViewerHandle, ViewerProps>(function Viewer3D(props, 
     const v = viewer.current
     if (!v || !models.current.gtRec) return
     styleAll(v, models.current, props)
+    lastRestyleTs.current = performance.now()
     v.render()
   }, [props.showGtReceptor, props.showGtLigand, props.showPredLigand, props.showPredReceptor, props.showPocket, props.showViolations, props.trajectoryMode, props.diagnostics, props.highlightAtoms, props.highlightClash, props.highlightResidue, props.highlightGtAtoms, props.atomDisplacement, props.predColor])
 
@@ -186,7 +189,7 @@ type Models = {
   gtRec?: $3Dmol.GLModel; gtLig?: $3Dmol.GLModel; predRec?: $3Dmol.GLModel; predLig?: $3Dmol.GLModel
   traj?: $3Dmol.GLModel; pocketTraj?: $3Dmol.GLModel; pocketRec?: $3Dmol.GLModel
   gtPocket?: ResidueSel[]; predPocket?: ResidueSel[]
-  clashLabel?: $3Dmol.Label
+  labels: $3Dmol.Label[]
 }
 
 /** Residues of `rec` with any heavy atom within POCKET_CUTOFF of any atom of `lig`, grouped by chain. */
@@ -213,7 +216,7 @@ function pocketSelection(rec: $3Dmol.GLModel, lig: $3Dmol.GLModel | undefined): 
 
 function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
   v.removeAllShapes()
-  if (m.clashLabel) { v.removeLabel(m.clashLabel); m.clashLabel = undefined }
+  clearLabels(v, m)
   const hide: $3Dmol.AtomStyleSpec = {}  // empty style = not drawn
 
   const pocketMode = p.trajectoryMode === 'pocket' && !!m.pocketTraj
@@ -289,10 +292,10 @@ function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
     })
     const xyz = (a: $3Dmol.AtomSpec) => ({ x: a.x!, y: a.y!, z: a.z! })
     const labelAt = (a: $3Dmol.AtomSpec, b: $3Dmol.AtomSpec, text: string) => {
-      m.clashLabel = v.addLabel(text, {
+      m.labels.push(v.addLabel(text, {
         position: { x: (a.x! + b.x!) / 2, y: (a.y! + b.y!) / 2, z: (a.z! + b.z!) / 2 }, backgroundColor: '#f2b01e', backgroundOpacity: 0.95,
         fontColor: '#1c1c22', fontSize: 11, borderThickness: 0, inFront: true,
-      } as $3Dmol.LabelSpec)
+      } as $3Dmol.LabelSpec))
     }
     d.protein_clashes.forEach((c, i) => {
       const a = ligAtoms[c.atom]
@@ -339,6 +342,13 @@ function styleAll(v: $3Dmol.GLViewer, m: Models, p: ViewerProps) {
     v.addStyle({ model: lig, index: p.highlightAtoms }, { sphere: { radius: 0.7, color: '#f2b01e', opacity: 0.8 } })
   }
 
+}
+
+/** remove every label this component added (distance labels); called on every restyle and on leave */
+function clearLabels(v: $3Dmol.GLViewer, m: Models) {
+  for (const l of m.labels) v.removeLabel(l)
+  m.labels = []
+  if (import.meta.env.DEV) (window as unknown as { __angstromLabels?: () => number }).__angstromLabels = () => m.labels.length
 }
 
 /** clash-shape hover callbacks run inside 3Dmol's event loop; route them to the latest props */
