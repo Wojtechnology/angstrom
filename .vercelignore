@@ -1,0 +1,9 @@
+# Only api/, web/ sources, vercel.json and package.json are needed for the build.
+preprocessing/
+web/node_modules/
+web/dist/
+web/.vite/
+api/.venv/
+**/__pycache__/
+.git/
+*.md
