@@ -241,7 +241,7 @@ export default function SystemView() {
                 value={trajectoryMode}
                 onChange={setTrajectoryMode}
                 width={150}
-                options={[{ value: 'off', label: 'off' }, { value: 'ligand', label: 'ligand only' }, ...(hasPocketTraj ? [{ value: 'pocket' as TrajMode, label: 'ligand + pocket' }] : [])]}
+                options={[{ value: 'off', label: 'off' }, ...(hasPocketTraj ? [{ value: 'pocket' as TrajMode, label: 'ligand + pocket' }] : []), { value: 'ligand', label: 'ligand only' }]}
               />
             </span>
             <button className="btn ml-auto" style={{ border: 'none' }} onClick={() => viewer.current?.zoomToLigand()}><Focus size={13} /> ligand</button>
@@ -291,7 +291,7 @@ export default function SystemView() {
                 </div>
               </div>
 
-              <PocketCard pocket={detail.pocket_minimisation ?? null} gt={sys.gt.pocket_minimisation ?? null} plot={pocketPlot} showPlot={trajectoryMode === 'pocket'} excess={excessFor(index, sys.system_id, method, 'excess_relaxation_de') ?? (detail.pocket_minimisation?.ok && sys.gt.pocket_minimisation?.ok ? (detail.pocket_minimisation.e_interaction_pose - detail.pocket_minimisation.e_interaction_min) - (sys.gt.pocket_minimisation.e_interaction_pose - sys.gt.pocket_minimisation.e_interaction_min) : null)} />
+              <PocketCard pocket={detail.pocket_minimisation ?? null} gt={sys.gt.pocket_minimisation ?? null} plot={pocketPlot} showPlot={true} excess={excessFor(index, sys.system_id, method, 'excess_relaxation_de') ?? (detail.pocket_minimisation?.ok && sys.gt.pocket_minimisation?.ok ? (detail.pocket_minimisation.e_interaction_pose - detail.pocket_minimisation.e_interaction_min) - (sys.gt.pocket_minimisation.e_interaction_pose - sys.gt.pocket_minimisation.e_interaction_min) : null)} />
 
               <div className="card px-4 py-3">
                 <div className="flex items-center justify-between">
